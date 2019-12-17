@@ -79,12 +79,12 @@ class Updater(chainer.training.StandardUpdater):
         player = self.coords.W[self.args.nbrand:]
         xp = self.coords.xp
 
-        # order consistency loss
+        ## order consistency loss
+        # arccos (spherical)
 #        dpos = F.arccos(F.sum(player[pid]*brand[b1],axis=1))
 #        dneg = F.arccos(F.sum(player[pid]*brand[b2],axis=1))
         dpos = -F.sum(player[pid]*brand[b1],axis=1)
         dneg = -F.sum(player[pid]*brand[b2],axis=1)
-        # arccos (spherical)
         loss_ord = F.average(F.relu(dpos-dneg+self.args.margin))
         # Euclidean
 #        loss_ord = F.triplet(player[pid],brand[b1],brand[b2], margin=self.args.margin )
@@ -94,10 +94,12 @@ class Updater(chainer.training.StandardUpdater):
         loss_repel = 0
         if self.args.lambda_repel>0:
             p = np.random.choice(self.args.nplayer,min(self.args.batchsize,self.args.nplayer))
-            loss_repel_p = F.average(F.relu(F.matmul(player[p],player[p],transb=True)-self.args.repel_margin))
+            loss_repel_p = F.average((F.matmul(player[p],player[p],transb=True)+1)**2)
+#            loss_repel_p = F.average(F.relu(F.matmul(player[p],player[p],transb=True)-self.args.repel_margin))
 #            loss_repel_p = F.average( (F.expand_dims(player,axis=0) - F.expand_dims(player,axis=1))**2 )
             chainer.report({'loss_repel_p': loss_repel_p}, self.coords)
-            loss_repel_b = F.average(F.relu(F.matmul(brand,brand,transb=True)-self.args.repel_margin))
+            loss_repel_b = F.average((F.matmul(brand,brand,transb=True)+1)**2)
+#            loss_repel_b = F.average(F.relu(F.matmul(brand,brand,transb=True)-self.args.repel_margin))
             chainer.report({'loss_repel_b': loss_repel_b}, self.coords)
             loss_repel = loss_repel_p + loss_repel_b
 #        loss_radius = F.average(self.player.W ** 2)

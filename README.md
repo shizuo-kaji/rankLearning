@@ -33,7 +33,7 @@ where x is closer to the player pid (i.e., x>y for pid).
 batch size (-b 20), number of epochs (-e 50), learning rate (-lr 0.01), learning rate drop times (-ld 10) have a large impact on the speed and the accuracy of learning.
 - Starting from given coordinates (set initial configuration)
 ```
-    python rankLearn.py ranking.csv -e 50 -lr 0.01 -o ~/Downloads/result -ld 10 -p out_players.csv -b out_brands.csv
+    python rankLearn.py ranking.csv -e 50 -lr 0.01 -rp 1e-1 -o ~/Downloads/result -ld 10 -p out_players.csv -b out_brands.csv
 ```
 - Parallel learning
 ```

@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 
 ### TODO
-## １ブランドが複数点もてるように。=> Torus
+## a brand can have multiple representative points (e.g., arrangement on a torus)
 
 from __future__ import print_function
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
-mpl.use('Agg')
+#mpl.use('Agg')
 
 import chainer
 import chainer.functions as F
@@ -21,16 +21,17 @@ from chainerui.utils import save_args
 
 import os,glob,random,datetime,argparse
 from consts import optim,dtypes
+from arrangement import plot_arrangements,save_plot
 
 ## dataset preparation
 ## player id should be 0,1,2,...,m-1
 ## brand id should be 0,1,2,...,n-1
 class Dataset(dataset_mixin.DatasetMixin):
     def __init__(self, fname):
-        rawdat = pd.read_csv(fname, header=None)
+        rawdat = pd.read_csv(fname, header=None) # format: player id, brand id1, brand id2 (id1>id2 for player)
         self.dat = rawdat.iloc[:,[0,1,2]].values.astype(np.int32)
-        self.nbrand = len(pd.concat([rawdat[1],rawdat[2]]).unique())
-        self.nplayer = len(rawdat[0].unique())
+        self.nbrand = max(np.max(self.dat[:,1]),np.max(self.dat[:,2]))+1
+        self.nplayer = np.max(self.dat[:,0])+1
         print("#brands {}, #players {}, #ineq {}".format(self.nbrand,self.nplayer,len(self.dat)))
 
     def __len__(self):
@@ -59,7 +60,7 @@ class Evaluator(extensions.Evaluator):
             pdat = coords.W.data
         np.savetxt(os.path.join(self.args.outdir,"out_brands{:0>4}.csv".format(self.count)), pdat[:self.args.nbrand], fmt='%1.5f', delimiter=",")
         np.savetxt(os.path.join(self.args.outdir,"out_players{:0>4}.csv".format(self.count)), pdat[self.args.nbrand:], fmt='%1.5f', delimiter=",")
-#        plot_all(dat,os.path.join(self.args.outdir,"plot{:0>4}.png".format(self.count)))
+        save_plot(pdat[:self.args.nbrand],pdat[self.args.nbrand:],os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
         self.count += 1
         loss_radius = F.average(coords.W ** 2)
         return {"myval/radius":loss_radius}
@@ -78,42 +79,50 @@ class Updater(chainer.training.StandardUpdater):
         brand = self.coords.W[:self.args.nbrand]
         player = self.coords.W[self.args.nbrand:]
         xp = self.coords.xp
+        loss = 0
 
         ## order consistency loss
         # arccos (spherical)
 #        dpos = F.arccos(F.sum(player[pid]*brand[b1],axis=1))
 #        dneg = F.arccos(F.sum(player[pid]*brand[b2],axis=1))
-        dpos = -F.sum(player[pid]*brand[b1],axis=1)
-        dneg = -F.sum(player[pid]*brand[b2],axis=1)
-        loss_ord = F.average(F.relu(dpos-dneg+self.args.margin))
+#        dpos = -F.sum(player[pid]*brand[b1],axis=1)
+#        dneg = -F.sum(player[pid]*brand[b2],axis=1)
+#        loss_ord = F.average(F.relu(dpos-dneg+self.args.margin))
         # Euclidean
-#        loss_ord = F.triplet(player[pid],brand[b1],brand[b2], margin=self.args.margin )
+        loss_ord = F.triplet(player[pid],brand[b1],brand[b2], margin=self.args.margin )
         chainer.report({'loss_ord': loss_ord}, self.coords)
+        loss += self.args.lambda_ord * loss_ord
 
         # repelling force among players
-        loss_repel = 0
-        if self.args.lambda_repel>0:
-            p = np.random.choice(self.args.nplayer,min(self.args.batchsize,self.args.nplayer))
-            loss_repel_p = F.average((F.matmul(player[p],player[p],transb=True)+1)**2)
+        loss_repel_b, loss_repel_p = 0,0
+        if self.args.lambda_repel_player>0:
+#            p = np.random.choice(self.args.nplayer,min(self.args.batchsize,self.args.nplayer))
+#            loss_repel_p = F.average((F.matmul(player[p],player[p],transb=True)+1)**2)   # spherical
 #            loss_repel_p = F.average(F.relu(F.matmul(player[p],player[p],transb=True)-self.args.repel_margin))
-#            loss_repel_p = F.average( (F.expand_dims(player,axis=0) - F.expand_dims(player,axis=1))**2 )
+            dist_mat = F.sum((F.expand_dims(player,axis=0) - F.expand_dims(player,axis=1))**2,axis=2)
+            dist_mat += self.args.nplayer*xp.eye(self.args.nplayer)
+            loss_repel_p = F.average( 1/(dist_mat+1e-6) ) # all to all Euclid
             chainer.report({'loss_repel_p': loss_repel_p}, self.coords)
-            loss_repel_b = F.average((F.matmul(brand,brand,transb=True)+1)**2)
-#            loss_repel_b = F.average(F.relu(F.matmul(brand,brand,transb=True)-self.args.repel_margin))
+        if self.args.lambda_repel_brand>0:
+#            loss_repel_b = F.average((F.matmul(brand,brand,transb=True)+1)**2)
+#            loss_repel_b = F.average(F.relu(F.matmul(brand,brand,transb=True)-self.args.repel_margin)) # spherical
+            dist_mat = F.sum((F.expand_dims(brand,axis=0) - F.expand_dims(brand,axis=1))**2,axis=2)
+            dist_mat += self.args.nbrand*xp.eye(self.args.nbrand)
+            loss_repel_b = F.average( 1/(dist_mat+1e-6) ) # all to all Euclid
             chainer.report({'loss_repel_b': loss_repel_b}, self.coords)
-            loss_repel = loss_repel_p + loss_repel_b
+        loss += self.args.lambda_repel_player * loss_repel_p + self.args.lambda_repel_brand * loss_repel_b
+
 #        loss_radius = F.average(self.player.W ** 2)
 #        chainer.report({'loss_R': loss_radius}, self.player)
-
-        loss = loss_ord + self.args.lambda_repel * loss_repel
 
         self.coords.cleargrads()
         loss.backward()
         opt.update(loss=loss)
 
-        ## normalise to norm=1
-        self.coords.W.data /= xp.sqrt(xp.sum(self.coords.W.data**2,axis=1,keepdims=True))
-
+        ## normalise to norm=1 for spherical
+        # self.coords.W.data /= xp.sqrt(xp.sum(self.coords.W.data**2,axis=1,keepdims=True))
+        ## clip to the unit box
+        self.coords.W.data = xp.clip(self.coords.W.data, -1 ,1)
 
 def main():
     # command line argument parsing
@@ -127,13 +136,13 @@ def main():
                         help='Number of sweeps over the dataset to train')
     parser.add_argument('--gpu', '-g', type=int, default=-1,
                         help='GPU ID (negative value indicates CPU)')
-    parser.add_argument('--dim', '-d', type=int, default=3,
+    parser.add_argument('--dim', '-d', type=int, default=2,
                         help='Output dimension')
     parser.add_argument('--margin', '-m', type=float, default=0.1,
-                        help='margin for the metric boundary')
-    parser.add_argument('--repel_margin', '-mr', type=float, default=0.3,
-                        help='players should be separated by this distance')
-    parser.add_argument('--weight_decay', '-wd', type=float, default=1e-6,
+                        help='margin to the hyperplane boundary')
+#    parser.add_argument('--repel_margin', '-mr', type=float, default=0.3,
+#                        help='players should be separated by this distance')
+    parser.add_argument('--weight_decay', '-wd', type=float, default=0,
                         help='weight decay for regularization on player coordinates')
     parser.add_argument('--wd_norm', '-wn', choices=['l1','l2'], default='l2',
                         help='norm of weight decay for regularization')
@@ -141,8 +150,12 @@ def main():
                         help='learning rate')
     parser.add_argument('--learning_rate_drop', '-ld', type=float, default=5,
                         help='how many times to half learning rate')
-    parser.add_argument('--lambda_repel', '-rp', type=float, default=0.1,
+    parser.add_argument('--lambda_ord', '-lo', type=float, default=1,
+                        help='weight for order consistency')
+    parser.add_argument('--lambda_repel_player', '-rp', type=float, default=0,
                         help='weight for repelling force between players')
+    parser.add_argument('--lambda_repel_brand', '-rb', type=float, default=0,
+                        help='weight for repelling force between brands')
     parser.add_argument('--outdir', '-o', default='result',
                         help='Directory to output the result')
     parser.add_argument('--optimizer', '-op',choices=optim.keys(),default='Adam',
@@ -155,7 +168,7 @@ def main():
     args = parser.parse_args()
 
     args.outdir = os.path.join(args.outdir, datetime.datetime.now().strftime('%m%d_%H%M'))
-    save_args(args, args.outdir)
+    #save_args(args, args.outdir)
 
     # Enable autotuner of cuDNN
     chainer.config.autotune = True
@@ -199,13 +212,13 @@ def main():
     if args.brand:
         xb = np.loadtxt(args.brand, delimiter=",")
     else:
-        xb = np.random.rand(args.nbrand,args.dim)*2-1
+        xb = np.random.rand(args.nbrand,args.dim)*2-1  # [-1,1]
     if args.player:
         xpl = np.loadtxt(args.player, delimiter=",")
     else:
         xpl = np.random.rand(args.nplayer,args.dim)*2-1
     X = np.concatenate([xb,xpl])
-    X /= np.sqrt(np.sum(X**2,axis=1,keepdims=True))
+#    X /= np.sqrt(np.sum(X**2,axis=1,keepdims=True)) # spherical
     coords = L.Parameter(X.astype(dtypes[args.dtype]))
     
     # Set up an optimizer
@@ -241,33 +254,32 @@ def main():
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.outdir)
 
 #    frequency = args.epoch if args.snapshot == -1 else max(1, args.snapshot)
-    log_interval = 1000, 'iteration'
+    log_interval = 50, 'iteration'
 
     if primary:
-        trainer.extend(extensions.LogReport(trigger=log_interval))
         if extensions.PlotReport.available():
             trainer.extend(extensions.PlotReport(['opt/loss_ord','opt/loss_repel_p','opt/loss_repel_b','opt/loss_R'], #,'myval/radius'],
                                     'epoch', file_name='loss.png'))
         trainer.extend(extensions.PrintReport([
                 'epoch', 'lr', 'opt/loss_ord', 'opt/loss_repel_p', 'opt/loss_repel_b','elapsed_time',
             ]),trigger=log_interval)
+        trainer.extend(extensions.LogReport(trigger=log_interval))
         trainer.extend(extensions.ProgressBar(update_interval=10))
         trainer.extend(extensions.observe_lr('opt'), trigger=log_interval)
-        save_args(args, args.outdir)
-        trainer.extend(extensions.LogReport(trigger=log_interval))
 #        trainer.extend(extensions.ParameterStatistics(coords))
         if args.vis_freq>0:
             trainer.extend(Evaluator(train_iter, {'coords':coords}, params={'args': args}, device=args.gpu),trigger=(args.vis_freq, 'iteration'))
-        trainer.extend(Evaluator(train_iter, {'coords':coords}, params={'args': args}, device=args.gpu),trigger=(args.epoch, 'epoch'))
+        else:
+            trainer.extend(Evaluator(train_iter, {'coords':coords}, params={'args': args}, device=args.gpu),trigger=(args.epoch, 'epoch'))
 
     if args.optimizer in ['SGD','Momentum','CMomentum','AdaGrad','RMSprop','NesterovAG']:
-#        trainer.extend(extensions.observe_lr(), trigger=log_interval)
         trainer.extend(extensions.ExponentialShift('lr', 0.5, optimizer=opt), trigger=(args.epoch/args.learning_rate_drop, 'epoch'))
     elif args.optimizer in ['Adam','AdaBound','Eve']:
-#        trainer.extend(extensions.observe_lr(), trigger=log_interval)
         trainer.extend(extensions.ExponentialShift("alpha", 0.5, optimizer=opt), trigger=(args.epoch/args.learning_rate_drop, 'epoch'))
 
     trainer.run()
+    coords.to_cpu()
+    plot_arrangements(coords.W.array[:args.nbrand],coords.W.array[args.nbrand:],args)
 
 if __name__ == '__main__':
     main()

@@ -15,70 +15,35 @@ import argparse
 import pandas as pd
 import os
 from datetime import datetime as dt
+from chainerui.utils import save_args
 
 def side_of_line(p, q, mint=-100, maxt=100):
     return zip(p+(q-p)*mint, p+(q-p)*maxt)
 
-# command line argument parsing
-parser = argparse.ArgumentParser(description='Multi-Perceptron classifier/regressor')
-parser.add_argument('--brand', '-b', help='Path to brand coordinates csv file')
-parser.add_argument('--player', '-p', help='Path to point coordinates csv file')
-parser.add_argument('--maxx', default=1.0, help='max coordinate in each dimension')
-parser.add_argument('--dim', '-d', default=3, type=int, help='dimension')
-parser.add_argument('--nplayer', '-np', default=1000, type=int, help='number of random players')
-parser.add_argument('--nbrand', '-nb', default=10, type=int, help='number of brands')
-parser.add_argument('--size', '-s', type=int, default=1,help='Plot size of the dots')
-parser.add_argument('--plot', action='store_true',help='plot?')
-parser.add_argument('--generate', '-g', action='store_true',help='generate and save random data?')
-parser.add_argument('--outdir', '-o', default='result',
-                    help='Directory to output the result')
-args = parser.parse_args()
-args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
-os.makedirs(args.outdir, exist_ok=True)
-
-## read/generate coordinates
-if args.brand:
-    brand = pd.read_csv(args.brand, header=None).iloc[:,:args.dim].values
-else:
-    brand = np.random.rand(args.nbrand,args.dim)*2-1    ## [-1,1]
-if args.player:
-    player = pd.read_csv(args.player, header=None).iloc[:,:args.dim].values
-else:
-    player = np.random.rand(args.nplayer,args.dim)*2-1     ## [-1,1]
-
-## normalise to norm=1
-brand /= np.sqrt(np.sum(brand**2,axis=1,keepdims=True))
-player /= np.sqrt(np.sum(player**2,axis=1,keepdims=True))
-
-#dm = distance_matrix(brand,player) # Euclid
-dm = np.arccos(np.dot(brand,player.T)) # spherical
-print(dm.shape)
-ranking = np.array( [np.argsort(dm[:,k]) for k in range(dm.shape[1])] )
-
-## save ranking to file
-if args.generate:
-    np.savetxt(os.path.join(args.outdir,"players.csv"), player , fmt='%1.5f', delimiter=",")
-    np.savetxt(os.path.join(args.outdir,"brands.csv"), brand , fmt='%1.5f', delimiter=",")
-    np.savetxt(os.path.join(args.outdir,"full_ranking.csv"), ranking, fmt='%d', delimiter=",")
-    with open(os.path.join(args.outdir,'ranking.csv'), 'w') as f:
-        for k in range(len(player)):
-            for i in range(len(brand)):
-                for j in range(i+1,len(brand)):
-                    if( dm[i,k] < dm[j,k] ):
-                        f.write("{},{},{}\n".format(k,i,j))
-                    else:
-                        f.write("{},{},{}\n".format(k,j,i))
-
-
-# scatter plot
-if args.plot:
+def save_plot(brand,player,fname):
     fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_aspect('equal')
+    plt.xlim(-1.1, 1.1)
+    plt.ylim(-1.1, 1.1)
+    ax.plot(brand[:,0],brand[:,1],marker="x",linestyle='None',c='r')
+#    ax.plot(player[:,0],player[:,1],marker="o",linestyle='None')
+    ax.scatter(player[:,0],player[:,1], s=2)
+    plt.savefig(fname)
+    plt.close()
+
+def plot_arrangements(brand,player,args):
+    fig = plt.figure()
+    args.maxx = 1.0
+    args.size = 1
+    dm = distance_matrix(brand,player) # Euclid
+    ranking = np.array( [np.argsort(dm[:,k]) for k in range(dm.shape[1])] )
     if args.dim == 2:
         ax = fig.add_subplot(1, 1, 1)
         ax.set_aspect('equal')
         #ax.set_axis_off()
-        plt.xlim(-1.5*args.maxx, 1.5*args.maxx)
-        plt.ylim(-1.5*args.maxx, 1.5*args.maxx)
+        plt.xlim(-1.1*args.maxx, 1.1*args.maxx)
+        plt.ylim(-1.1*args.maxx, 1.1*args.maxx)
         P = [Point(*brand[i]) for i in range(len(brand))]
         for i in range(len(brand)):
             plt.plot(*zip(P[i]), 'o')
@@ -122,3 +87,62 @@ if args.plot:
         plt.title(args.brand+"\n"+args.player)
 #    plt.colorbar()
     plt.show()
+
+if __name__ == '__main__':
+    # command line argument parsing
+    parser = argparse.ArgumentParser(description='Multi-Perceptron classifier/regressor')
+    parser.add_argument('--brand', '-b', help='Path to brand coordinates csv file')
+    parser.add_argument('--player', '-p', help='Path to point coordinates csv file')
+    parser.add_argument('--maxx', default=1.0, help='max coordinate in each dimension')
+    parser.add_argument('--dim', '-d', default=2, type=int, help='dimension')
+    parser.add_argument('--nplayer', '-np', default=1000, type=int, help='number of random players')
+    parser.add_argument('--nbrand', '-nb', default=10, type=int, help='number of brands')
+    parser.add_argument('--plot', action='store_true',help='plot?')
+    parser.add_argument('--generate', '-g', action='store_true',help='generate and save random data?')
+    parser.add_argument('--generate_partial_ranking', action='store_true',help='generate and save random data?')
+    parser.add_argument('--outdir', '-o', default='result',
+                        help='Directory to output the result')
+    args = parser.parse_args()
+    args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
+    os.makedirs(args.outdir, exist_ok=True)
+    save_args(args, args.outdir)
+
+    ## read/generate coordinates
+    if args.brand:
+        brand = pd.read_csv(args.brand, header=None).iloc[:,:args.dim].values
+    else:
+        brand = np.random.rand(args.nbrand,args.dim)*2-1    ## [-1,1]
+    if args.player:
+        player = pd.read_csv(args.player, header=None).iloc[:,:args.dim].values
+    else:
+        player = np.random.rand(args.nplayer,args.dim)*2-1     ## [-1,1]
+
+    ## normalise to norm=1
+    #brand /= np.sqrt(np.sum(brand**2,axis=1,keepdims=True))
+    #player /= np.sqrt(np.sum(player**2,axis=1,keepdims=True))
+
+    dm = distance_matrix(brand,player) # Euclid
+    #dm = np.arccos(np.dot(brand,player.T)) # spherical
+    print(dm.shape)
+    ranking = np.array( [np.argsort(dm[:,k]) for k in range(dm.shape[1])] )
+    full_ranking = np.insert(ranking, 0, np.arange(len(player)), axis=1)
+
+    ## save ranking to file
+    if args.generate:
+        np.savetxt(os.path.join(args.outdir,"players.csv"), player , fmt='%1.5f', delimiter=",")
+        np.savetxt(os.path.join(args.outdir,"brands.csv"), brand , fmt='%1.5f', delimiter=",")
+        np.savetxt(os.path.join(args.outdir,"ranking.csv"), full_ranking, fmt='%d', delimiter=",")
+        if args.generate_partial_ranking:
+            with open(os.path.join(args.outdir,'partial_ranking.csv'), 'w') as f:
+                for k in range(len(player)):
+                    for i in range(len(brand)):
+                        for j in range(i+1,len(brand)):
+                            if( dm[i,k] < dm[j,k] ):
+                                f.write("{},{},{}\n".format(k,i,j))
+                            else:
+                                f.write("{},{},{}\n".format(k,j,i))
+
+
+    # scatter plot
+    if args.plot:
+        plot_arrangements(brand,player,args)

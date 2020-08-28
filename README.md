@@ -1,5 +1,6 @@
 Metric Learning of Ranking data
 =============
+Written by Shizuo KAJI
 
 ## Requirements
 - Python 3: [Anaconda](https://www.anaconda.com/download/) is recommended
@@ -23,21 +24,21 @@ Output files are found under `result` directory.
 ```
 - Each line in the ranking file ranking.csv has the following format:
 ```
-    pid, x, y
+    pid, x, y, z, ...
 ```
-where x is closer to the player pid (i.e., x>y for pid).
+where x > y > z > ... for player pid.
 - Metric Learning: The following takes ranking.csv and outputs out_brands.csv (predicted brand coords) and out_players.csv (predicted player coords) under "~/Downloads/result" directory
 ```
-    python rankLearn.py ranking.csv -e 50 -lr 0.01 -o ~/Downloads/result -ld 10
+    python rankLearn.py ranking.csv -e 50 -lr 0.01 -o ~/result -ld 10
 ```
 batch size (-b 20), number of epochs (-e 50), learning rate (-lr 0.01), learning rate drop times (-ld 10) have a large impact on the speed and the accuracy of learning.
 - Starting from given coordinates (set initial configuration)
 ```
-    python rankLearn.py ranking.csv -e 50 -lr 0.01 -o ~/Downloads/result -ld 10 -p out_players.csv -b out_brands.csv
+    python rankLearn.py ranking.csv -e 50 -lr 0.01 -rp 1e-1 -o ~/result -ld 10 -p out_players.csv -b out_brands.csv
 ```
 - Parallel learning
 ```
-    mpiexec -n 4 python rankLearn.py ranking.csv -e 50 -lr 0.01 -o ~/Downloads/result --mpi
+    mpiexec -n 4 python rankLearn.py ranking.csv -e 50 -lr 0.01 -o ~/result --mpi
 ```
 - For usage
 ```

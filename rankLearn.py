@@ -226,7 +226,7 @@ def main():
     args = parser.parse_args()
 
     args.outdir = os.path.join(args.outdir, datetime.datetime.now().strftime('%m%d_%H%M'))
-    save_args(args, args.outdir)
+    #save_args(args, args.outdir)
 
     # Enable autotuner of cuDNN
     chainer.config.autotune = True

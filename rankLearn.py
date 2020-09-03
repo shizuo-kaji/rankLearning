@@ -21,14 +21,14 @@ from chainerui.utils import save_args
 
 import os,glob,random,datetime,argparse
 from consts import optim,dtypes
-from arrangement import plot_arrangements,save_plot
+from arrangement import plot_arrangements,save_plot,estimate_vol,rank_hist
 
 def plot_log(f,a,summary):
     a.set_yscale('log')
 
 def load_ranking(fname,top_n=99):
     dat = []
-    full_rank = np.loadtxt(fname,delimiter=",") ##TODO: we are assuming that full ranking data is privided
+    full_rank = np.loadtxt(fname,delimiter=",").astype(np.int32) ##TODO: we are assuming that full ranking data is privided
     for l in full_rank:           
         for i in range(1,min(len(l)-1,top_n)):
             for j in range(i+1,min(len(l),top_n+1)):
@@ -77,7 +77,9 @@ class Evaluator(extensions.Evaluator):
         params = kwargs.pop('params')
         super(Evaluator, self).__init__(*args, **kwargs)
         self.args = params['args']
+        self.hist_top_n = 3
         self.org_ranking = params['ranking'][:,1:]   # remove ID column
+        self.org_hist=rank_hist(self.org_ranking,self.hist_top_n)
         self.count = 0
     def evaluate(self):
         coords = self.get_target('coords')
@@ -93,11 +95,14 @@ class Evaluator(extensions.Evaluator):
         np.savetxt(os.path.join(self.args.outdir,"out_players{:0>4}.csv".format(self.count)), cplayer, fmt='%1.5f', delimiter=",")
         ranking = reconst_ranking(cplayer,cbrand)
         np.savetxt(os.path.join(self.args.outdir,"ranking{:0>4}.csv".format(self.count)), ranking, fmt='%d', delimiter=",")
-        print("\n\n accuracy: ",compare_rankings(ranking,self.org_ranking)/len(cplayer),"\n\n")
+        acc = compare_rankings(ranking,self.org_ranking)/len(cplayer)
+        print("\n\n accuracy: ",acc,"\n\n")
         save_plot(cbrand,cplayer,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
+        hist,err = estimate_vol(cbrand,self.hist_top_n)
+        corr = np.sum(hist*self.org_hist)/np.sqrt(np.sum(hist**2)*np.sum(self.org_hist**2))
         self.count += 1
         loss_radius = F.average(coords.W ** 2)
-        return {"myval/radius":loss_radius}
+        return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1]}
 
 ## updater 
 class Updater(chainer.training.StandardUpdater):
@@ -106,8 +111,8 @@ class Updater(chainer.training.StandardUpdater):
         params = kwargs.pop('params')
         super(Updater, self).__init__(*args, **kwargs)
         self.args = params['args']
-        self.adjust_start = -1 # self.args.epoch//3 # adjusting repel weight after this epoch
-        self.lambda_repel_player = 0
+        self.adjust_start = self.args.epoch//3 # adjusting repel weight after this epoch
+        self.lambda_repel_player = 0 # self.args.lambda_repel_player
         self.lambda_repel_brand = self.args.lambda_repel_brand
 
     def update_core(self):
@@ -119,7 +124,8 @@ class Updater(chainer.training.StandardUpdater):
         xp = self.coords.xp
         loss = 0
 
-        if self.is_new_epoch and self.adjust_start>0:
+        # linear interpolation between repelling force among players and among brands
+        if self.is_new_epoch and self.epoch>=self.adjust_start:
             self.lambda_repel_player = self.args.lambda_repel_player * (self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start) 
             self.lambda_repel_brand = self.args.lambda_repel_brand * (1-((self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start)))
 #            print(self.lambda_repel_player,self.lambda_repel_brand)
@@ -137,7 +143,7 @@ class Updater(chainer.training.StandardUpdater):
         chainer.report({'loss_ord': loss_ord}, self.coords)
         loss += self.args.lambda_ord * loss_ord
 
-        # repelling force
+        # repelling force among players
         loss_repel_b, loss_repel_p, loss_box = 0,0,0
         if self.args.lambda_repel_player>0:
             p = np.random.choice(self.args.nplayer,min(self.args.batchsize,self.args.nplayer), replace=False)
@@ -147,6 +153,8 @@ class Updater(chainer.training.StandardUpdater):
 #            dist_mat += self.args.nplayer*xp.eye(self.args.nplayer)
             loss_repel_p = F.average( xp.tri(len(p),k=-1)/(dist_mat+1e-6) )
             chainer.report({'loss_repel_p': loss_repel_p}, self.coords)
+
+        # repelling force among brands
         if self.args.lambda_repel_brand>0:
 #            loss_repel_b = F.average((F.matmul(brand,brand,transb=True)+1)**2)
 #            loss_repel_b = F.average(F.relu(F.matmul(brand,brand,transb=True)-self.args.repel_margin)) # spherical
@@ -154,6 +162,7 @@ class Updater(chainer.training.StandardUpdater):
 #            dist_mat += self.args.nbrand*xp.eye(self.args.nbrand)
             loss_repel_b = F.average( xp.tri(self.args.nbrand,k=-1)/(dist_mat+1e-6) )
             chainer.report({'loss_repel_b': loss_repel_b}, self.coords)
+
         loss += self.lambda_repel_player * loss_repel_p + self.lambda_repel_brand * loss_repel_b
 
 #        loss_radius = F.average(self.player.W ** 2)
@@ -203,7 +212,7 @@ def main():
                         help='norm of weight decay for regularization')
     parser.add_argument('--learning_rate', '-lr', type=float, default=1e-2,
                         help='learning rate')
-    parser.add_argument('--learning_rate_drop', '-ld', type=float, default=5,
+    parser.add_argument('--learning_rate_drop', '-ld', type=float, default=10,
                         help='how many times to half learning rate')
 
     parser.add_argument('--lambda_ord', '-lo', type=float, default=1,
@@ -318,8 +327,10 @@ def main():
         if extensions.PlotReport.available():
             trainer.extend(extensions.PlotReport(['opt/loss_ord','opt/loss_repel_p','opt/loss_repel_b','opt/loss_box','opt/loss_R'], #,'myval/radius'],
                                     'epoch', file_name='loss.jpg',postprocess=plot_log))
+            trainer.extend(extensions.PlotReport(['myval/corr','myval/acc1','myval/acc2'],
+                                    'epoch', file_name='loss_val.jpg'))
         trainer.extend(extensions.PrintReport([
-                'epoch', 'lr', 'opt/loss_ord', 'opt/loss_repel_p', 'opt/loss_repel_b','opt/loss_box','elapsed_time',
+                'epoch', 'lr', 'opt/loss_ord', 'opt/loss_repel_p', 'opt/loss_repel_b','opt/loss_box','myval/corr', 'myval/acc1'  #'elapsed_time',
             ]),trigger=log_interval)
         trainer.extend(extensions.LogReport(trigger=log_interval))
         trainer.extend(extensions.ProgressBar(update_interval=10))

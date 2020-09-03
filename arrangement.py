@@ -17,6 +17,40 @@ import os
 from datetime import datetime as dt
 from chainerui.utils import save_args
 
+def estimate_vol(cbrand,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
+    hist = np.zeros([folds]+[cbrand.shape[0]]*top_n)
+    dim = cbrand.shape[1]
+    for j in range(max_iter):
+        s = 0
+        converged = True
+        p = np.random.rand(n*folds,dim)*2-1
+        for i in range(n):
+            for k in range(folds):
+                d = np.sqrt(np.sum((p[s]-cbrand)**2,axis=1))
+                ranking = tuple(np.argsort(d)[:top_n])
+                hist[k][ranking] += 1
+                s += 1
+        for k1 in range(folds):
+            for k2 in range(k1+1,folds):
+                err = np.sum(( (hist[k1]-hist[k2])/((j+1)*n) )**2)
+                if(err > eps):
+                    converged = False
+                    break
+            if not converged:
+                break
+        if converged:
+            return(hist[0]/((j+1)*n),err)
+    print("\n\n volume computation did not converge!", err)
+    return(hist[0]/((j+1)*n),err)
+
+
+def rank_hist(full_ranking,top_n):
+    nb = int(np.max(full_ranking))+1
+    hist = np.zeros([nb]*top_n)
+    for r in full_ranking:
+        hist[tuple(r[:top_n])] += 1
+    return(hist/len(full_ranking))
+
 def side_of_line(p, q, mint=-100, maxt=100):
     return zip(p+(q-p)*mint, p+(q-p)*maxt)
 
@@ -127,6 +161,13 @@ if __name__ == '__main__':
     ranking = np.array( [np.argsort(dm[:,k]) for k in range(dm.shape[1])] )
     full_ranking = np.insert(ranking, 0, np.arange(len(player)), axis=1)
 
+    hist = rank_hist(ranking, 3)
+    print([np.sum(v) for v in hist])
+    print(hist[hist>0]*8)
+#    vol,err = estimate_vol(brand)
+#    print([np.sum(v) for v in vol])
+#    print(err,vol[vol>0]*8)
+
     ## save ranking to file
     if args.generate:
         np.savetxt(os.path.join(args.outdir,"players.csv"), player , fmt='%1.5f', delimiter=",")
@@ -144,5 +185,6 @@ if __name__ == '__main__':
 
 
     # scatter plot
+    save_plot(brand,player,os.path.join(args.outdir,'output.png'))
     if args.plot:
         plot_arrangements(brand,player,args)

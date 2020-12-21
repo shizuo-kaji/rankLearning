@@ -178,6 +178,7 @@ if __name__ == '__main__':
     parser.add_argument('--ranking1', '-r1', help='Path to full ranking csv file to compare distribution')
     parser.add_argument('--ranking2', '-r2', help='Path to full ranking csv file to compare distribution')
     parser.add_argument('--top_n', '-tn', default=99, type=int, help='focus on top n rankings')
+    parser.add_argument('--sample_method', '-m', default='ball', type=str, help='random sampling method')
     parser.add_argument('--maxx', default=1.0, help='max coordinate in each dimension')
     parser.add_argument('--dim', '-d', default=2, type=int, help='dimension')
     parser.add_argument('--ninstance', '-np', default=1000, type=int, help='number of random instances')
@@ -203,15 +204,21 @@ if __name__ == '__main__':
     if args.label:
         label = pd.read_csv(args.label, header=None).iloc[:,:args.dim].values
     else:
-        label = random_from_ball(args.dim, args.nlabel)
-        X = np.linspace(-1,1,int(np.sqrt(args.nlabel)))
-        x,y = np.meshgrid(X,X)
-        label = np.stack([x.ravel(),y.ravel()], axis=-1)
+        if args.sample_method == 'ball':
+            label = random_from_ball(args.dim, args.nlabel)
+        elif args.sample_method == 'box':
+            label = random_from_box(args.dim, args.nlabel)
+        elif args.sample_method == 'equal': # equally spaced
+            X = np.linspace(-1,1,int(np.sqrt(args.nlabel)))
+            x,y = np.meshgrid(X,X)
+            label = np.stack([x.ravel(),y.ravel()], axis=-1)
     if args.instance:
         instance = pd.read_csv(args.instance, header=None).iloc[:,:args.dim].values
     else:
-        instance = random_from_ball(args.dim, args.ninstance) 
-        instance = random_from_box(args.dim, args.ninstance) 
+        if args.sample_method == 'ball':
+            instance = random_from_ball(args.dim, args.ninstance) 
+        else:
+            instance = random_from_box(args.dim, args.ninstance) 
 
     ## normalise to norm=1
     #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))

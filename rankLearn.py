@@ -117,7 +117,7 @@ class Updater(chainer.training.StandardUpdater):
 #            loss_repel_p = F.average(F.relu(F.matmul(instance[p],instance[p],transb=True)-self.args.repel_margin))
             dist_mat = F.sum((F.expand_dims(instance[p],axis=0) - F.expand_dims(instance[p],axis=1))**2,axis=2)  # distance squared
             loss_repel_p = F.average( xp.tri(len(p),k=-1)/(dist_mat+1e-6) ) # strictly lower triangular
-            chainer.report({'loss_repel_p': loss_repel_p}, self.coords)
+            chainer.report({'loss_p': loss_repel_p}, self.coords)
 
         # repelling force among labels
         if self.args.lambda_repel_label>0:
@@ -126,7 +126,7 @@ class Updater(chainer.training.StandardUpdater):
             dist_mat = F.sum((F.expand_dims(label,axis=0) - F.expand_dims(label,axis=1))**2,axis=2)
 #            dist_mat += self.args.nlabel*xp.eye(self.args.nlabel)
             loss_repel_b = F.average( xp.tri(self.args.nlabel,k=-1)/(dist_mat+1e-6) )
-            chainer.report({'loss_repel_b': loss_repel_b}, self.coords)
+            chainer.report({'loss_b': loss_repel_b}, self.coords)
 
         loss += self.lambda_repel_instance * loss_repel_p + self.lambda_repel_label * loss_repel_b
 
@@ -299,18 +299,18 @@ def main():
         log_interval = max(50000//args.batchsize,10), 'iteration'
 
         if extensions.PlotReport.available():
-            trainer.extend(extensions.PlotReport(['opt/loss_ord','opt/loss_repel_p','opt/loss_repel_b','opt/loss_domain','opt/loss_R'], #,'myval/radius'],
+            trainer.extend(extensions.PlotReport(['opt/loss_ord','opt/loss_p','opt/loss_b','opt/loss_domain','opt/loss_R'], #,'myval/radius'],
                                     'epoch', file_name='loss.jpg',postprocess=plot_log))
             trainer.extend(extensions.PlotReport(['myval/corr','myval/acc1','myval/acc2','myval/accN'],
                                     'epoch', file_name='loss_val.jpg'))
             trainer.extend(extensions.PlotReport(['myval/KL'],
                                     'epoch', file_name='loss_val_KL.jpg'))
         trainer.extend(extensions.PrintReport([
-                'epoch', 'lr','opt/loss_ord', 'opt/loss_repel_p', 'opt/loss_repel_b','opt/loss_domain','myval/corr', 'myval/acc1', 'myval/accN', 'myval/KL'  #'elapsed_time', 'opt/lambda_repel', 
+                'epoch', 'lr','opt/loss_ord', 'opt/loss_p', 'opt/loss_b','opt/loss_domain','myval/corr', 'myval/acc1', 'myval/accN', 'myval/KL'  #'elapsed_time', 'opt/lambda_repel', 
             ]),trigger=log_interval)
-        trainer.extend(extensions.LogReport(trigger=log_interval))
+        trainer.extend(extensions.LogReport(trigger=(1, 'epoch')))
         trainer.extend(extensions.ProgressBar(update_interval=10))
-        trainer.extend(extensions.observe_lr('opt'), trigger=log_interval)
+        trainer.extend(extensions.observe_lr('opt'), trigger=(1, 'epoch'))
 #        trainer.extend(extensions.ParameterStatistics(coords))
 
     ## annealing

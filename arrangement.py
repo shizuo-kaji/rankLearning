@@ -214,6 +214,7 @@ if __name__ == '__main__':
                         help='Directory to output the result')
     args = parser.parse_args()
     args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
+    os.makedirs(args.outdir, exist_ok=True)
 
     ## read/generate coordinates
     if args.ranking2:
@@ -253,6 +254,7 @@ if __name__ == '__main__':
         if args.generate:
             np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
             np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
+            plot_arrangements(label,instance,args,os.path.join(args.outdir,'output.png'))
 
         ## normalise to norm=1
         #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))
@@ -263,7 +265,6 @@ if __name__ == '__main__':
         ninstance, nlabel = ranking.shape
         # scatter plot
     #    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
-        plot_arrangements(label,instance,args,os.path.join(args.outdir,'output.png'))
 
     #
     print("(#instance, #label)", ninstance, nlabel)
@@ -274,7 +275,6 @@ if __name__ == '__main__':
 #    print(err,vol[vol>0]*8)
 
     ## save ranking to file
-    os.makedirs(args.outdir, exist_ok=True)
     save_args(args, args.outdir)
     if args.generate:
         np.savetxt(os.path.join(args.outdir,"ranking.csv"), full_ranking, fmt='%d', delimiter=",")

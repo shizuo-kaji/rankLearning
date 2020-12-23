@@ -27,15 +27,6 @@ from cosshift import CosineShift
 def plot_log(f,a,summary):
     a.set_yscale('log')
 
-def load_ranking(fname,top_n=99):
-    dat = []
-    rank = np.loadtxt(fname,delimiter=",").astype(np.int32)
-    for l in rank:
-        for i in range(1,min(len(l)-1,top_n)):  # make a string of ranking to pairwise comparisons
-            for j in range(i+1,min(len(l),top_n+1)):
-                dat.append([l[0],l[i],l[j]]) # pid,a>b
-    return(np.array(dat,dtype=np.int32),rank)
-
 # evaluator
 class Evaluator(extensions.Evaluator):
     name = "myval"
@@ -45,7 +36,7 @@ class Evaluator(extensions.Evaluator):
         params = kwargs.pop('params')
         super(Evaluator, self).__init__(*args, **kwargs)
         self.args = params['args']
-        self.hist_top_n = 3
+        self.hist_top_n = params['top_n']
         self.org_ranking = params['ranking'][:,1:]   # remove ID column
         self.org_hist=rank_hist(self.org_ranking,self.hist_top_n)
         self.count = 0
@@ -63,8 +54,9 @@ class Evaluator(extensions.Evaluator):
         acc = compare_rankings(ranking,self.org_ranking)
         hist,err = estimate_vol(clabel,self.hist_top_n)
         corr = np.corrcoef(hist.ravel(),self.org_hist.ravel())[0,1]
+        KL = symmetrisedKL(hist.ravel(),self.org_hist.ravel())
         with open(os.path.join(self.args.outdir,"accuracy.txt"), 'a') as f:
-            print("\n\n accuracy: {}, corr: {} \n\n".format(acc,corr), file=f)
+            print("accuracy: {}, corr: {}, KL: {} \n".format(acc,corr,KL), file=f)
         self.count += 1
         loss_radius = F.average(coords.W ** 2)
         if self.args.save_evaluation or save:
@@ -73,7 +65,7 @@ class Evaluator(extensions.Evaluator):
             full_ranking = np.insert(ranking, 0, np.arange(self.args.ninstance), axis=1) ## add instance id
             np.savetxt(os.path.join(self.args.outdir,"ranking{:0>4}.csv".format(self.count)), full_ranking, fmt='%d', delimiter=",")
             save_plot(clabel,cinstance,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
-        return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1]}
+        return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1], "myval/accN": acc[-1], "myval/KL": KL}
 
 ## updater 
 class Updater(chainer.training.StandardUpdater):
@@ -98,11 +90,12 @@ class Updater(chainer.training.StandardUpdater):
         xp = self.coords.xp
         loss,loss_repel_b, loss_repel_p, loss_box = 0,0,0,0
 
-        # linear interpolation between repelling force among instances and among labels
+        # interpolation of repelling force among instances and among labels
         if self.is_new_epoch and self.epoch>=self.adjust_start:
-            self.lambda_repel_instance = self.args.lambda_repel_instance * (self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start) # increase
-            self.lambda_repel_label = self.args.lambda_repel_label * (1-((self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start))) # decrease
-#            print(self.lambda_repel_instance,self.lambda_repel_label)
+            t =  (self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start) # [0,1]
+            self.lambda_repel_instance = self.args.lambda_repel_instance * np.cos(0.5*np.pi*(1-t)) # increase
+            self.lambda_repel_label = self.args.lambda_repel_label * np.cos(0.5*np.pi*t) # decrease
+            chainer.report({'lambda_repel': self.lambda_repel_instance}, self.coords)
 
         ## order consistency loss
         # arccos (spherical)
@@ -168,12 +161,15 @@ def main():
     # command line argument parsing
     parser = argparse.ArgumentParser(description='Ranking learning')
     parser.add_argument('train', help='Path to ranking csv file')
+    parser.add_argument('--val', default=None, help='Path to ranking csv file')
     parser.add_argument('--label', '-b', help='Path to initial label coordinates csv file')
     parser.add_argument('--instance', '-i', help='Path to initial point coordinates csv file')
     parser.add_argument('--outdir', '-o', default='result', help='Directory to output the result')
     #
     parser.add_argument('--top_n', '-tn', type=int, default=99,
                         help='Use only top n rankings for each person')
+    parser.add_argument('--val_top_n', '-vtn', type=int, default=3,
+                        help='Use only top n rankings for each person in the evaluation')
     parser.add_argument('--batchsize', '-bs', type=int, default=50,
                         help='Number of samples in each mini-batch')
     parser.add_argument('--epoch', '-e', type=int, default=100,
@@ -206,15 +202,26 @@ def main():
                         help='start increasing repelling weight after this times the total epochs')
 
     parser.add_argument('--vis_freq', '-vf', type=int, default=-1,
-                        help='evaluation frequency in iteration')
+                        help='evaluation frequency in epochs')
     parser.add_argument('--save_evaluation', '-se', action='store_true',help='output evaluation results')
     parser.add_argument('--mpi', action='store_true',help='parallelise with MPI')
     args = parser.parse_args()
 
     args.outdir = os.path.join(args.outdir, datetime.datetime.now().strftime('%m%d_%H%M'))
-    save_args(args, args.outdir)
-
     chainer.config.autotune = True
+
+    ## instance id should be 0,1,2,...,m-1
+    ## label id should be 0,1,2,...,n-1
+    ranking = np.loadtxt(args.train,delimiter=",").astype(np.int32)
+    if args.val:
+        val_ranking = np.loadtxt(args.val,delimiter=",").astype(np.int32)    
+    else:
+        val_ranking = ranking
+    pairwise_comparisons = make_pairwise_comparison(ranking, args.top_n)
+    args.nlabel = int(max(np.max(pairwise_comparisons[:,1]),np.max(pairwise_comparisons[:,2]))+1)
+    args.ninstance = int(np.max(pairwise_comparisons[:,0])+1)
+    if args.batchsize <= 0:
+        args.batchsize = min(pairwise_comparisons//100, 200) 
 
     ## ChainerMN
     if args.mpi:
@@ -238,15 +245,9 @@ def main():
         if args.gpu >= 0:
             chainer.cuda.get_device(args.gpu).use()
     
-    # read csv file
-    ## instance id should be 0,1,2,...,m-1
-    ## label id should be 0,1,2,...,n-1
-    pairwise_comparisons, ranking = load_ranking(args.train, args.top_n)
-    args.nlabel = max(np.max(pairwise_comparisons[:,1]),np.max(pairwise_comparisons[:,2]))+1
-    args.ninstance = np.max(pairwise_comparisons[:,0])+1
-
     if primary:
         print("#labels {}, #instances {}, #ineq {}".format(args.nlabel,args.ninstance,len(pairwise_comparisons)))
+        save_args(args, args.outdir)
 
     # if args.mpi:
     #     if comm.rank == 0:
@@ -291,22 +292,21 @@ def main():
         )
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.outdir)
 
-    
     if primary:
-        evaluator = Evaluator(train_iter, {'coords':coords}, params={'args': args, 'ranking': ranking}, device=args.gpu)
+        evaluator = Evaluator(train_iter, {'coords':coords}, params={'args': args, 'top_n': args.val_top_n, 'ranking': val_ranking}, device=args.gpu)
         if args.vis_freq > 0:
-            trainer.extend(evaluator,trigger=(args.vis_freq, 'iteration'))
-            log_interval = min(200,args.vis_freq//2), 'iteration'
-        else:
-            log_interval = 200, 'iteration'
+            trainer.extend(evaluator,trigger=(args.vis_freq, 'epoch'))
+        log_interval = max(50000//args.batchsize,10), 'iteration'
 
         if extensions.PlotReport.available():
             trainer.extend(extensions.PlotReport(['opt/loss_ord','opt/loss_repel_p','opt/loss_repel_b','opt/loss_domain','opt/loss_R'], #,'myval/radius'],
                                     'epoch', file_name='loss.jpg',postprocess=plot_log))
-            trainer.extend(extensions.PlotReport(['myval/corr','myval/acc1','myval/acc2'],
+            trainer.extend(extensions.PlotReport(['myval/corr','myval/acc1','myval/acc2','myval/accN'],
                                     'epoch', file_name='loss_val.jpg'))
+            trainer.extend(extensions.PlotReport(['myval/KL'],
+                                    'epoch', file_name='loss_val_KL.jpg'))
         trainer.extend(extensions.PrintReport([
-                'epoch', 'lr', 'opt/loss_ord', 'opt/loss_repel_p', 'opt/loss_repel_b','opt/loss_domain','myval/corr', 'myval/acc1'  #'elapsed_time',
+                'epoch', 'lr','opt/loss_ord', 'opt/loss_repel_p', 'opt/loss_repel_b','opt/loss_domain','myval/corr', 'myval/acc1', 'myval/accN', 'myval/KL'  #'elapsed_time', 'opt/lambda_repel', 
             ]),trigger=log_interval)
         trainer.extend(extensions.LogReport(trigger=log_interval))
         trainer.extend(extensions.ProgressBar(update_interval=10))

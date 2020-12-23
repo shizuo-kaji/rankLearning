@@ -9,6 +9,8 @@ from mpl_toolkits.mplot3d import Axes3D
 
 from sympy.geometry import Point, Circle, Triangle, Segment, Line
 from scipy.spatial import distance_matrix
+from scipy.stats import entropy
+
 import numpy as np
 import matplotlib.pyplot as plt
 import argparse
@@ -30,16 +32,24 @@ def random_from_sphere(dim,n_samples, norm=1.0):
     x = np.random.randn( n_samples, dim )
     return( ( (norm / np.sqrt(np.sum(x**2,axis=1)))[:,np.newaxis]) * x)
 
+# symmetrised version of KL divergence of p and q
+def symmetrisedKL(p,q):
+    pq = (p+q)/2
+    return( (entropy(p,pq) + entropy(q,pq)) /2 )
+
+## estimate ranking distribution from arrangement
 #@njit(parallel=True)
 def estimate_vol(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
-    hist = np.zeros([folds]+[label.shape[0]]*top_n)
+    n_label=label.shape[0]
+    _top_n = min(top_n,n_label)
+    hist = np.zeros([folds]+[n_label]* _top_n)
     dim = label.shape[1]
     for j in range(max_iter):
         converged = True
         for k in range(folds):
             p = random_from_ball(dim,n) # generate n-points
             dist_mat = np.sum((np.expand_dims(label,axis=0) - np.expand_dims(p,axis=1))**2,axis=2)
-            ranking = np.argsort(dist_mat,axis=1)[:,:top_n]
+            ranking = np.argsort(dist_mat,axis=1)[:,:_top_n]
             for r in ranking:
                 hist[k][tuple(r)] += 1
 #            print(dist_mat.shape,len(ranking),np.sum(hist[k]))
@@ -56,32 +66,44 @@ def estimate_vol(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
     print("\n\n volume computation did not converge!", err)
     return(hist[0]/((j+1)*n),err)
 
-#%% test
-# import time
-# label = pd.read_csv("result/brands-4uniform.csv", header=None).iloc[:,:2].values
-# start = time.time()
-# v,err = estimate_vol(label,max_iter=2000,n=500)
-# print(np.sum(v),v[0,1,2],err)
-# elapsed_time = time.time() - start
-# print ("elapsed_time:{0}".format(elapsed_time) + "[sec]")
-
-#%%
-def rank_hist(full_ranking,top_n):
-    nlabels = int(np.max(full_ranking))+1
-    hist = np.zeros([nlabels]*top_n)
-    for r in full_ranking:
-        hist[tuple(r[:top_n])] += 1
-    return(hist/len(full_ranking))
+# ranking distribution from full ranking (without instance ID)
+def rank_hist(ranking,top_n):
+    nlabels = int(np.max(ranking))+1
+    _top_n = min(nlabels,top_n)
+    hist = np.zeros([nlabels]* _top_n)
+    for r in ranking:
+        hist[tuple(r[:_top_n])] += 1
+    return(hist/len(ranking))
 
 # compare full rankings: return (acc for top 1, acc for top1&2, ...)
 def compare_rankings(rank1,rank2,top_n=99):
-    score = np.zeros(min(top_n,rank1.shape[1]))
+    _top_n = min(top_n,rank1.shape[1],rank2.shape[1])
+    score = np.zeros(_top_n)
     for a,b in zip(rank1,rank2):
         i=0
-        while(i<min(top_n,len(a)) and a[i]==b[i]):
+        while(i<_top_n and a[i]==b[i]):
             score[i] += 1
             i += 1
     return(score/len(rank1))
+
+# convert full_ranking to pairwise comparison
+def make_pairwise_comparison(full_ranking,top_n=99):
+    dat = []
+    for l in full_ranking:
+        for i in range(1,min(len(l)-1,top_n)):  # make a string of ranking to pairwise comparisons
+            for j in range(i+1,min(len(l),top_n+1)):
+                dat.append([l[0],l[i],l[j]]) # pid,a>b
+    return(np.array(dat,dtype=np.int32))
+
+# for each instance, randomly sample ranking with a specified ratio
+def random_sample_ranking(pairwise_ranking, ratio=0.9):
+    n = (pairwise_ranking[:,0]).max()+1
+    L = []
+    for i in range(n):
+        idx = np.where(pairwise_ranking[:,0]==i)[0]
+        np.random.shuffle(idx)
+        L.extend(idx[:int(ratio*len(idx))])
+    return(pairwise_ranking[np.array(L)])
 
 # ranking from arrangements
 def reconst_ranking(instance,label):
@@ -106,6 +128,8 @@ def save_plot(label,instance,fname):
     ax.plot(label[:,0],label[:,1],marker="x",linestyle='None',c='r')
 #    ax.plot(instance[:,0],instance[:,1],marker="o",linestyle='None')
     ax.scatter(instance[:,0],instance[:,1], s=2)
+    for i in range(len(label)):
+        ax.annotate(str(i), (label[i,0],label[i,1]))
     plt.savefig(fname)
     plt.close()
 
@@ -185,14 +209,14 @@ if __name__ == '__main__':
     parser.add_argument('--nlabel', '-nb', default=10, type=int, help='number of labels')
     parser.add_argument('--plot', action='store_true',help='plot')
     parser.add_argument('--generate', '-g', action='store_true',help='save data')
-    parser.add_argument('--generate_partial_ranking', '-gp', action='store_true',help='save data')
+    parser.add_argument('--pairwise_comparison_ratio', '-pr', type=float, default=0, help='ratio of pairwise comparison data')
     parser.add_argument('--outdir', '-o', default='result',
                         help='Directory to output the result')
     args = parser.parse_args()
     args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
 
     ## read/generate coordinates
-    if args.ranking1:
+    if args.ranking2:
         ranking1 = pd.read_csv(args.ranking1, header=None).iloc[:,1:].values
         ranking2 = pd.read_csv(args.ranking2, header=None).iloc[:,1:].values
         hist1 = rank_hist(ranking1, 4)
@@ -201,33 +225,48 @@ if __name__ == '__main__':
         print("top: ", rank_hist(ranking1, 2))
         print("top: ", rank_hist(ranking2, 2))
         exit()
-    if args.label:
-        label = pd.read_csv(args.label, header=None).iloc[:,:args.dim].values
+
+    if args.ranking1:
+        full_ranking = np.loadtxt(args.ranking1,delimiter=",").astype(np.int32)
+        ranking = full_ranking[:,1:]
+        ninstance = (full_ranking[:,0]).max()+1
+        nlabel = ranking.max()+1
     else:
-        if args.sample_method == 'ball':
-            label = random_from_ball(args.dim, args.nlabel)
-        elif args.sample_method == 'box':
-            label = random_from_box(args.dim, args.nlabel)
-        elif args.sample_method == 'equal': # equally spaced
-            X = np.linspace(-1,1,int(np.sqrt(args.nlabel)))
-            x,y = np.meshgrid(X,X)
-            label = np.stack([x.ravel(),y.ravel()], axis=-1)
-    if args.instance:
-        instance = pd.read_csv(args.instance, header=None).iloc[:,:args.dim].values
-    else:
-        if args.sample_method == 'ball':
-            instance = random_from_ball(args.dim, args.ninstance) 
+        if args.label:
+            label = pd.read_csv(args.label, header=None).iloc[:,:args.dim].values
         else:
-            instance = random_from_box(args.dim, args.ninstance) 
+            if args.sample_method == 'ball':
+                label = random_from_ball(args.dim, args.nlabel)
+            elif args.sample_method == 'box':
+                label = random_from_box(args.dim, args.nlabel)
+            elif args.sample_method == 'equal': # equally spaced
+                X = np.linspace(-1,1,int(np.sqrt(args.nlabel)))
+                x,y = np.meshgrid(X,X)
+                label = np.stack([x.ravel(),y.ravel()], axis=-1)
+        if args.instance:
+            instance = pd.read_csv(args.instance, header=None).iloc[:,:args.dim].values
+        else:
+            if args.sample_method == 'ball':
+                instance = random_from_ball(args.dim, args.ninstance) 
+            else:
+                instance = random_from_box(args.dim, args.ninstance) 
+        if args.generate:
+            np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
+            np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
 
-    ## normalise to norm=1
-    #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))
-    #instance /= np.sqrt(np.sum(instance**2,axis=1,keepdims=True))
-    
-    ranking = reconst_ranking(instance,label)
-    print("(#instance, #label)", ranking.shape)
-    full_ranking = np.insert(ranking, 0, np.arange(len(instance)), axis=1) ## add instance id
+        ## normalise to norm=1
+        #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))
+        #instance /= np.sqrt(np.sum(instance**2,axis=1,keepdims=True))
+        
+        ranking = reconst_ranking(instance,label)
+        full_ranking = np.insert(ranking, 0, np.arange(len(instance)), axis=1) ## add instance id
+        ninstance, nlabel = ranking.shape
+        # scatter plot
+    #    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
+        plot_arrangements(label,instance,args,os.path.join(args.outdir,'output.png'))
 
+    #
+    print("(#instance, #label)", ninstance, nlabel)
     hist = rank_hist(ranking, 1)
     print("top 1: ", hist)
 #    vol,err = estimate_vol(label)
@@ -238,22 +277,18 @@ if __name__ == '__main__':
     os.makedirs(args.outdir, exist_ok=True)
     save_args(args, args.outdir)
     if args.generate:
-        np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
-        np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
         np.savetxt(os.path.join(args.outdir,"ranking.csv"), full_ranking, fmt='%d', delimiter=",")
-        if args.generate_partial_ranking:
-            with open(os.path.join(args.outdir,'partial_ranking.csv'), 'w') as f:
-                for k in range(len(instance)):
-                    for i in range(len(label)):
-                        for j in range(i+1,len(label)):
-                            if( dm[i,k] < dm[j,k] ):
-                                f.write("{},{},{}\n".format(k,i,j))
-                            else:
-                                f.write("{},{},{}\n".format(k,j,i))
-
-
-    # scatter plot
-#    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
-    plot_arrangements(label,instance,args,os.path.join(args.outdir,'output.png'))
+        if args.pairwise_comparison_ratio>0:
+            pairwise_comparisons = make_pairwise_comparison(full_ranking, args.top_n)
+            sampled_ranking = random_sample_ranking(pairwise_comparisons, ratio=args.pairwise_comparison_ratio)
+            np.savetxt(os.path.join(args.outdir,'pairwise_comparison.csv'), sampled_ranking, fmt='%d', delimiter=',')
 
 # %%
+#%% test
+# import time
+# label = pd.read_csv("result/brands-4uniform.csv", header=None).iloc[:,:2].values
+# start = time.time()
+# v,err = estimate_vol(label,max_iter=2000,n=500)
+# print(np.sum(v),v[0,1,2],err)
+# elapsed_time = time.time() - start
+# print ("elapsed_time:{0}".format(elapsed_time) + "[sec]")

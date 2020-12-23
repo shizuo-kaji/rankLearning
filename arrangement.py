@@ -89,17 +89,17 @@ def normalise_hist(p):
     
 
 ## estimate ranking distribution from arrangement
-def estimate_vol(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
+def estimate_vol(label,top_n=3,from_n=0,folds=2,eps=1e-5,max_iter=2000,n=500):
     n_label=label.shape[0]
     _top_n = min(top_n,n_label)
-    hist = np.zeros([folds]+[n_label]* _top_n, dtype=np.float32)
+    hist = np.zeros([folds]+[n_label]* (_top_n-from_n), dtype=np.float32)
     dim = label.shape[1]
     for j in range(max_iter):
         converged = True
         for k in range(folds):
             p = random_from_ball(dim,n) # generate n-points
             dist_mat = np.sum((np.expand_dims(label,axis=0) - np.expand_dims(p,axis=1))**2,axis=2)
-            ranking = np.argsort(dist_mat,axis=1)[:,:_top_n]
+            ranking = np.argsort(dist_mat,axis=1)[:,from_n:_top_n]
             for r in ranking:
                 hist[k][tuple(r)] += 1
 #            print(dist_mat.shape,len(ranking),np.sum(hist[k]))
@@ -118,7 +118,7 @@ def estimate_vol(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
 
 # using dictionary
 #@njit(parallel=True)
-def estimate_vol2(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
+def estimate_vol2(label,top_n=3,from_n=0,folds=2,eps=1e-5,max_iter=2000,n=500):
     hists = [dict() for i in range(folds)]
     dim = label.shape[1]
     for j in range(max_iter):
@@ -129,7 +129,7 @@ def estimate_vol2(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
 #            r = np.random.random(n) ** (1./dim)
 #            p = ( (r / np.sqrt(np.sum(p**2,axis=1))).reshape(-1,1)) * p
             dist_mat = np.sum((np.expand_dims(label,axis=0) - np.expand_dims(p,axis=1))**2,axis=2)
-            ranking = np.argsort(dist_mat,axis=1)[:,:top_n]
+            ranking = np.argsort(dist_mat,axis=1)[:,from_n:top_n]
             for r in ranking:
                 u = tuple(r[:top_n])
                 if u in hists[k]:
@@ -152,20 +152,20 @@ def estimate_vol2(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
 
 ## ranking distribution from full ranking (without instance ID)
 # using numpy array
-def rank_hist(ranking,top_n=99):
+def rank_hist(ranking,top_n=99,from_n=0):
     nlabels = int(np.max(ranking))+1
     _top_n = min(nlabels,top_n)
-    hist = np.zeros([nlabels]* _top_n, dtype=np.float32)
+    hist = np.zeros([nlabels]* (_top_n-from_n), dtype=np.float32)
     for r in ranking:
-        hist[tuple(r[:_top_n])] += 1
+        hist[tuple(r[from_n:_top_n])] += 1
     return(hist/len(ranking))
 
 # using dictionary (less memory)
-def rank_hist2(ranking,top_n=99):
+def rank_hist2(ranking,top_n=99,from_n=0):
     ninstances = len(ranking)
     hist = dict()
     for r in ranking:
-        u = tuple(r[:top_n])
+        u = tuple(r[from_n:top_n])
         if u in hist:
             hist[u] += 1/ninstances
         else:
@@ -173,11 +173,11 @@ def rank_hist2(ranking,top_n=99):
     return(hist)
 
 # compare full rankings: return (acc for top 1, acc for top1&2, ...)
-def compare_rankings(rank1,rank2,top_n=99):
+def compare_rankings(rank1,rank2,top_n=99,from_n=0):
     _top_n = min(top_n,rank1.shape[1],rank2.shape[1])
     score = np.zeros(_top_n)
     for a,b in zip(rank1,rank2):
-        i=0
+        i=from_n
         while(i<_top_n and a[i]==b[i]):
             score[i] += 1
             i += 1
@@ -298,7 +298,8 @@ if __name__ == '__main__':
     parser.add_argument('--instance', '-p', help='Path to point coordinates csv file')
     parser.add_argument('--ranking1', '-r1', help='Path to full ranking csv file to compare distribution')
     parser.add_argument('--ranking2', '-r2', help='Path to full ranking csv file to compare distribution')
-    parser.add_argument('--top_n', '-tn', default=99, type=int, help='focus on top n rankings')
+    parser.add_argument('--top_n', '-tn', default=5, type=int, help='focus on top n rankings')
+    parser.add_argument('--from_n', '-fn', default=0, type=int, help='focus on rankings from')
     parser.add_argument('--sample_method', '-m', default='ball', type=str, help='random sampling method')
     parser.add_argument('--maxx', default=1.0, help='max coordinate in each dimension')
     parser.add_argument('--dim', '-d', default=2, type=int, help='dimension')
@@ -370,28 +371,28 @@ if __name__ == '__main__':
         if args.label:
             start = time.time()
             if args.use_dict:
-                hist1,err = estimate_vol2(label,args.top_n)
+                hist1,err = estimate_vol2(label,args.top_n,args.from_n)
             else:
-                hist1,err = estimate_vol(label,args.top_n)
+                hist1,err = estimate_vol(label,args.top_n,args.from_n)
             elapsed_time = time.time() - start
             print ("volume estimation took :{} with error {}".format(elapsed_time,err))
         else:
-            hist1 = rank_hist(ranking, args.top_n)
-            h1 = rank_hist2(ranking, args.top_n)
+            if args.use_dict:
+                hist1 = rank_hist2(ranking, args.top_n,args.from_n)
+            else:
+                hist1 = rank_hist(ranking, args.top_n,args.from_n)
 
         if args.use_dict:
-            h2 = rank_hist2(ranking2, args.top_n)
-            print("corr: {}, KL: {}".format(cor2(h1,h2), symmetrisedKL2(h1,h2)))
+            hist2 = rank_hist2(ranking2, args.top_n,args.from_n)
+            print("corr: {}, KL: {}".format(cor2(hist1,hist2), symmetrisedKL2(hist1,hist2)))
         else:
-            hist2 = rank_hist(ranking2, args.top_n)
-        print("corr: {}, KL: {}".format(np.corrcoef(hist1.ravel(),hist2.ravel())[0,1], symmetrisedKL(hist1.ravel(),hist2.ravel())))
-        print("top (r1): ", rank_hist(ranking, 1))
-        print("top (r2): ", rank_hist(ranking2, 1))
+            hist2 = rank_hist(ranking2, args.top_n,args.from_n)
+            print("corr: {}, KL: {}".format(np.corrcoef(hist1.ravel(),hist2.ravel())[0,1], symmetrisedKL(hist1.ravel(),hist2.ravel())))
+        print("ranked at {}: {}".format(args.from_n+1, rank_hist(ranking2, args.from_n+1,args.from_n)))
 
     #
     print("(#instance, #label)", ninstance, nlabel)
-    hist = rank_hist(ranking, 1)
-    print("top 1: ", hist)
+    print("ranked at {}: {}".format(args.from_n+1, rank_hist(ranking, args.from_n+1,args.from_n)))
 #    vol,err = estimate_vol(label)
 #    print([np.sum(v) for v in vol])
 #    print(err,vol[vol>0]*8)

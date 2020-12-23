@@ -65,6 +65,7 @@ class Evaluator(extensions.Evaluator):
             full_ranking = np.insert(ranking, 0, np.arange(self.args.ninstance), axis=1) ## add instance id
             np.savetxt(os.path.join(self.args.outdir,"ranking{:0>4}.csv".format(self.count)), full_ranking, fmt='%d', delimiter=",")
             save_plot(clabel,cinstance,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
+            print("accuracy: {}, corr: {}, KL: {} \n".format(acc,corr,KL))
         return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1], "myval/accN": acc[-1], "myval/KL": KL}
 
 ## updater 
@@ -94,7 +95,7 @@ class Updater(chainer.training.StandardUpdater):
         if self.is_new_epoch and self.epoch>=self.adjust_start:
             t =  (self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start) # [0,1]
             self.lambda_repel_instance = self.args.lambda_repel_instance * np.cos(0.5*np.pi*(1-t)) # increase
-            self.lambda_repel_label = self.args.lambda_repel_label * np.cos(0.5*np.pi*t) # decrease
+            self.lambda_repel_label = self.args.lambda_repel_label * np.cos(0.5*np.pi*(t)) # decrease
             chainer.report({'lambda_repel': self.lambda_repel_instance}, self.coords)
 
         ## order consistency loss

@@ -15,10 +15,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import argparse
 import pandas as pd
-import os
+import os,time
 from datetime import datetime as dt
 from chainerui.utils import save_args
-#from numba import jit,njit,prange
+from numba import jit,njit,prange
 
 def random_from_box(dim,n_samples):    ## [-1,1]
     return( np.random.rand(n_samples,dim)*2-1 )
@@ -37,12 +37,62 @@ def symmetrisedKL(p,q):
     pq = (p+q)/2
     return( (entropy(p,pq) + entropy(q,pq)) /2 )
 
+# using dictionary
+# p log p/q
+def symmetrisedKL2(p,q):
+    KL = 0
+    for u in p:
+        if u in q:
+            KL += p[u]*np.log(2*p[u]/(p[u]+q[u])) + q[u]*np.log(2*q[u]/(p[u]+q[u]))
+        else:
+            KL += p[u]*np.log(2*p[u]/(p[u]))
+    for u in q:
+        if u not in p:
+            KL += q[u]*np.log(2*q[u]/(q[u]))
+    return( KL/2 )
+
+# correlation of two distributions
+def cor2(p,q):
+    c = 0
+    norm2_p, norm2_q = 0,0
+    for u in q:
+        norm2_q += q[u]**2
+    for u in p:
+        norm2_p += p[u]**2
+        if u in q:
+            c += p[u]*q[u]
+
+    return( c/np.sqrt(norm2_p*norm2_q) )
+
+# squared error
+def squared_error(p,q):
+    c = 0
+    for u in p:
+        if u in q:
+            c += (p[u]-q[u])**2
+        else:
+            c += p[u]**2
+    for u in q:
+        if u not in p:
+            c += q[u]**2
+    return(c)
+
+# normalise histogram to sum up to one
+def normalise_hist(p):
+    c = 0
+    normalised = dict()
+    for u in p:
+        c += p[u]
+    for u in p:
+        normalised[u] = p[u]/c
+    return(normalised)
+    
+
 ## estimate ranking distribution from arrangement
-#@njit(parallel=True)
 def estimate_vol(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
     n_label=label.shape[0]
     _top_n = min(top_n,n_label)
-    hist = np.zeros([folds]+[n_label]* _top_n)
+    hist = np.zeros([folds]+[n_label]* _top_n, dtype=np.float32)
     dim = label.shape[1]
     for j in range(max_iter):
         converged = True
@@ -66,14 +116,61 @@ def estimate_vol(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
     print("\n\n volume computation did not converge!", err)
     return(hist[0]/((j+1)*n),err)
 
-# ranking distribution from full ranking (without instance ID)
-def rank_hist(ranking,top_n):
+# using dictionary
+#@njit(parallel=True)
+def estimate_vol2(label,top_n=3,folds=2,eps=1e-5,max_iter=2000,n=500):
+    hists = [dict() for i in range(folds)]
+    dim = label.shape[1]
+    for j in range(max_iter):
+        converged = True
+        for k in range(folds):
+            p = random_from_ball(dim,n) # generate n-points
+#            p = np.random.randn( n, dim )
+#            r = np.random.random(n) ** (1./dim)
+#            p = ( (r / np.sqrt(np.sum(p**2,axis=1))).reshape(-1,1)) * p
+            dist_mat = np.sum((np.expand_dims(label,axis=0) - np.expand_dims(p,axis=1))**2,axis=2)
+            ranking = np.argsort(dist_mat,axis=1)[:,:top_n]
+            for r in ranking:
+                u = tuple(r[:top_n])
+                if u in hists[k]:
+                    hists[k][u] += 1
+                else:
+                    hists[k][u] = 1
+        for k1 in range(folds): # convergence check by comparing between folds
+            for k2 in range(k1+1,folds):
+                err = squared_error(hists[k1],hists[k2])/((j+1)*n)**2
+                if(err > eps):
+                    converged = False
+                    break
+            if not converged:
+                break
+        if converged:
+            return(normalise_hist(hists[0]),err)  # return the result of the first fold
+    print("\n\n volume computation did not converge!", err)
+    return(normalise_hist(hists[0]),err)
+
+
+## ranking distribution from full ranking (without instance ID)
+# using numpy array
+def rank_hist(ranking,top_n=99):
     nlabels = int(np.max(ranking))+1
     _top_n = min(nlabels,top_n)
-    hist = np.zeros([nlabels]* _top_n)
+    hist = np.zeros([nlabels]* _top_n, dtype=np.float32)
     for r in ranking:
         hist[tuple(r[:_top_n])] += 1
     return(hist/len(ranking))
+
+# using dictionary (less memory)
+def rank_hist2(ranking,top_n=99):
+    ninstances = len(ranking)
+    hist = dict()
+    for r in ranking:
+        u = tuple(r[:top_n])
+        if u in hist:
+            hist[u] += 1/ninstances
+        else:
+            hist[u] = 1/ninstances
+    return(hist)
 
 # compare full rankings: return (acc for top 1, acc for top1&2, ...)
 def compare_rankings(rank1,rank2,top_n=99):
@@ -209,32 +306,27 @@ if __name__ == '__main__':
     parser.add_argument('--nlabel', '-nb', default=10, type=int, help='number of labels')
     parser.add_argument('--plot', action='store_true',help='plot')
     parser.add_argument('--generate', '-g', action='store_true',help='save data')
+    parser.add_argument('--use_dict', action='store_true',help='use dictionary to record distribution (slower but less memory)')
     parser.add_argument('--pairwise_comparison_ratio', '-pr', type=float, default=0, help='ratio of pairwise comparison data')
     parser.add_argument('--outdir', '-o', default='result',
                         help='Directory to output the result')
     args = parser.parse_args()
     args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
-    os.makedirs(args.outdir, exist_ok=True)
+    if args.generate:
+        os.makedirs(args.outdir, exist_ok=True)
 
-    ## read/generate coordinates
-    if args.ranking2:
-        ranking1 = pd.read_csv(args.ranking1, header=None).iloc[:,1:].values
-        ranking2 = pd.read_csv(args.ranking2, header=None).iloc[:,1:].values
-        hist1 = rank_hist(ranking1, 4)
-        hist2 = rank_hist(ranking2, 4)
-        print("corr: ", np.corrcoef(hist1.ravel(),hist2.ravel()))
-        print("top: ", rank_hist(ranking1, 2))
-        print("top: ", rank_hist(ranking2, 2))
-        exit()
-
+    # ranking from model
     if args.ranking1:
         full_ranking = np.loadtxt(args.ranking1,delimiter=",").astype(np.int32)
         ranking = full_ranking[:,1:]
         ninstance = (full_ranking[:,0]).max()+1
         nlabel = ranking.max()+1
+        print("ranking loaded from ", args.ranking1)
     else:
         if args.label:
-            label = pd.read_csv(args.label, header=None).iloc[:,:args.dim].values
+            label = pd.read_csv(args.label, header=None).values
+            args.dim = label.shape[1]
+            print("label coordinates loaded from: ",args.label)
         else:
             if args.sample_method == 'ball':
                 label = random_from_ball(args.dim, args.nlabel)
@@ -244,13 +336,17 @@ if __name__ == '__main__':
                 X = np.linspace(-1,1,int(np.sqrt(args.nlabel)))
                 x,y = np.meshgrid(X,X)
                 label = np.stack([x.ravel(),y.ravel()], axis=-1)
+            print("label coordinates randomly generated.")
         if args.instance:
-            instance = pd.read_csv(args.instance, header=None).iloc[:,:args.dim].values
+            instance = pd.read_csv(args.instance, header=None).values
+            args.dim = instance.shape[1]
+            print("instance coordinates loaded from: ",args.instance)
         else:
             if args.sample_method == 'ball':
                 instance = random_from_ball(args.dim, args.ninstance) 
             else:
                 instance = random_from_box(args.dim, args.ninstance) 
+            print("instance coordinates randomly generated.")
         if args.generate:
             np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
             np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
@@ -261,10 +357,36 @@ if __name__ == '__main__':
         #instance /= np.sqrt(np.sum(instance**2,axis=1,keepdims=True))
         
         ranking = reconst_ranking(instance,label)
+        print("ranking reconstructed from coordinates.")
         full_ranking = np.insert(ranking, 0, np.arange(len(instance)), axis=1) ## add instance id
         ninstance, nlabel = ranking.shape
         # scatter plot
     #    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
+
+    # ground truth ranking
+    if args.ranking2:
+        ranking2 = pd.read_csv(args.ranking2, header=None).iloc[:,1:].values
+        print("ground truth ranking loaded from: ", args.ranking2)
+        if args.label:
+            start = time.time()
+            if args.use_dict:
+                hist1,err = estimate_vol2(label,args.top_n)
+            else:
+                hist1,err = estimate_vol(label,args.top_n)
+            elapsed_time = time.time() - start
+            print ("volume estimation took :{} with error {}".format(elapsed_time,err))
+        else:
+            hist1 = rank_hist(ranking, args.top_n)
+            h1 = rank_hist2(ranking, args.top_n)
+
+        if args.use_dict:
+            h2 = rank_hist2(ranking2, args.top_n)
+            print("corr: {}, KL: {}".format(cor2(h1,h2), symmetrisedKL2(h1,h2)))
+        else:
+            hist2 = rank_hist(ranking2, args.top_n)
+        print("corr: {}, KL: {}".format(np.corrcoef(hist1.ravel(),hist2.ravel())[0,1], symmetrisedKL(hist1.ravel(),hist2.ravel())))
+        print("top (r1): ", rank_hist(ranking, 1))
+        print("top (r2): ", rank_hist(ranking2, 1))
 
     #
     print("(#instance, #label)", ninstance, nlabel)
@@ -275,8 +397,8 @@ if __name__ == '__main__':
 #    print(err,vol[vol>0]*8)
 
     ## save ranking to file
-    save_args(args, args.outdir)
     if args.generate:
+        save_args(args, args.outdir)
         np.savetxt(os.path.join(args.outdir,"ranking.csv"), full_ranking, fmt='%d', delimiter=",")
         if args.pairwise_comparison_ratio>0:
             pairwise_comparisons = make_pairwise_comparison(full_ranking, args.top_n)

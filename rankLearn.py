@@ -195,14 +195,12 @@ def main():
                         help='weight for repelling force between instances')
     parser.add_argument('--lambda_repel_label', '-lrl', type=float, default=0,
                         help='weight for repelling force between labels')
-    parser.add_argument('--lambda_box', type=float, default=0,
-                        help='box domain containment loss')
-    parser.add_argument('--lambda_ball', '-lb', type=float, default=1,
-                        help='ball domain containment loss')
+    parser.add_argument('--lambda_box', type=float, default=0,help='box domain containment loss')
+    parser.add_argument('--lambda_ball', '-lb', type=float, default=1,help='ball domain containment loss')
     parser.add_argument('--repel_start', '-rs', type=float, default=0.3,
                         help='start increasing repelling weight after this times the total epochs')
 
-    parser.add_argument('--vis_freq', '-vf', type=int, default=-1,
+    parser.add_argument('--vis_freq', '-vf', type=int, default=10,
                         help='evaluation frequency in epochs')
     parser.add_argument('--save_evaluation', '-se', action='store_true',help='output evaluation results')
     parser.add_argument('--mpi', action='store_true',help='parallelise with MPI')

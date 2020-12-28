@@ -10,15 +10,72 @@ from mpl_toolkits.mplot3d import Axes3D
 from sympy.geometry import Point, Circle, Triangle, Segment, Line
 from scipy.spatial import distance_matrix
 from scipy.stats import entropy
+from sklearn.decomposition import PCA
 
-import numpy as np
+import itertools
 import matplotlib.pyplot as plt
+import matplotlib.pylab as pl
 import argparse
 import pandas as pd
 import os,time
 from datetime import datetime as dt
 from chainerui.utils import save_args
-from numba import jit,njit,prange
+#from numba import jit,njit,prange
+
+#%% TODO: optimise (by reverse search)
+def coset_kendall(r1,r2):
+    if len(set(r1)) != len(r1) or len(set(r2)) != len(r2):
+        return(np.inf)
+    tab = list(r1)
+    L = []
+    c = len(r1)
+    for k in r2:
+        if k not in tab:
+            tab.append(k)
+            L.append(c)
+            c += 1
+        else:
+            L.append(tab.index(k))
+    for c,k in enumerate(r1):
+        if k not in r2:
+            L.append(c)
+#    print(L)
+    ret =0
+    for i in range(len(L)):
+        for j in range(i+1,len(L)):
+            if L[i]>L[j]:
+                ret += 1
+    return(ret)
+#%%
+def wasserstein(p,q, nlabels, top_n, reg=1e-2):
+    import ot, ot.plot
+    eps = 1e-10
+    N = np.prod([nlabels-i for i in range(top_n)])
+#    print(N)
+    M = np.zeros( (N,N) )
+    mask = np.ones( nlabels**top_n, dtype=np.bool)
+    ii=0
+    for i,r1 in enumerate(itertools.product(range(nlabels), repeat=top_n)):
+        if(len(set(r1)) != len(r1) ):
+            mask[i] = False
+        else:
+            jj = 0
+            for j,r2 in enumerate(itertools.product(range(nlabels), repeat=top_n)):
+                if(len(set(r2)) == len(r2) ):
+#                    print((i,j),r1,r2)
+                    M[ii,jj]=coset_kendall(r1,r2)
+                    jj += 1
+            ii += 1
+    P = p.ravel()[mask]+eps
+    Q = q.ravel()[mask]+eps
+#    pl.figure(2, figsize=(5, 5))
+#    ot.plot.plot1D_mat(P, Q, M, 'Cost matrix M')
+#    pl.show()
+#    print(P.sum(),Q.sum(),P.min(),M.shape,P.shape,Q.shape)
+#    return(ot.emd2(P/P.sum(),Q/Q.sum(),M))
+    return(ot.bregman.sinkhorn2(P/P.sum(),Q/Q.sum(),M,reg=reg))
+
+#%%
 
 def random_from_box(dim,n_samples):    ## [-1,1]
     return( np.random.rand(n_samples,dim)*2-1 )
@@ -89,7 +146,7 @@ def normalise_hist(p):
     
 
 ## estimate ranking distribution from arrangement
-def estimate_vol(label,top_n=3,from_n=0,folds=2,eps=1e-5,max_iter=2000,n=500):
+def estimate_vol(label,top_n=3,from_n=0,folds=3,eps=1e-5,max_iter=2000,n=1000):
     n_label=label.shape[0]
     _top_n = min(top_n,n_label)
     hist = np.zeros([folds]+[n_label]* (_top_n-from_n), dtype=np.float32)
@@ -112,13 +169,13 @@ def estimate_vol(label,top_n=3,from_n=0,folds=2,eps=1e-5,max_iter=2000,n=500):
             if not converged:
                 break
         if converged:
-            return(hist[0]/((j+1)*n),err)  # return the result of the first fold
-    print("\n\n volume computation did not converge!", err)
-    return(hist[0]/((j+1)*n),err)
+            return(hist.sum(axis=0)/(folds*(j+1)*n),err)  # return the mean of folds
+    print("\n\n volume computation did not converge!\n\n", err)
+    return(hist.sum(axis=0)/(folds*(j+1)*n),err)
 
 # using dictionary
 #@njit(parallel=True)
-def estimate_vol2(label,top_n=3,from_n=0,folds=2,eps=1e-5,max_iter=2000,n=500):
+def estimate_vol2(label,top_n=3,from_n=0,folds=3,eps=1e-5,max_iter=2000,n=1000):
     hists = [dict() for i in range(folds)]
     dim = label.shape[1]
     for j in range(max_iter):
@@ -192,8 +249,17 @@ def make_pairwise_comparison(full_ranking,top_n=99):
                 dat.append([l[0],l[i],l[j]]) # pid,a>b
     return(np.array(dat,dtype=np.int32))
 
+# for each instance, randomly choose labels and reveal only ranking among them
+def random_sample_ranking(ranking, n_sample_label=5):
+    n_label = ranking.shape[1]
+    R = []
+    for r in ranking:
+        p = np.sort(np.random.choice(n_label, n_sample_label, replace=False))
+        R.append(r[p])       
+    return(np.stack(R))
+
 # for each instance, randomly sample ranking with a specified ratio
-def random_sample_ranking(pairwise_ranking, ratio=0.9):
+def random_sample_pairwise_comparison(pairwise_ranking, ratio=0.9):
     n = (pairwise_ranking[:,0]).max()+1
     L = []
     for i in range(n):
@@ -215,35 +281,40 @@ def reconst_ranking(instance,label):
 def side_of_line(p, q, mint=-100, maxt=100):
     return zip(p+(q-p)*mint, p+(q-p)*maxt)
 
-## plot the first two coordinates in the plane
+## plot the first two principal components in the plane
 def save_plot(label,instance,fname):
+    pca = PCA(n_components=2)
+    P = pca.fit(label)
+    X = P.transform(label)
+    Y = P.transform(instance)
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
     ax.set_aspect('equal')
-    plt.xlim(-1.1, 1.1)
-    plt.ylim(-1.1, 1.1)
-    ax.plot(label[:,0],label[:,1],marker="x",linestyle='None',c='r')
+#    plt.xlim(-1.1, 1.1)
+#    plt.ylim(-1.1, 1.1)
+    ax.plot(X[:,0],X[:,1],marker="x",linestyle='None',c='r')
 #    ax.plot(instance[:,0],instance[:,1],marker="o",linestyle='None')
-    ax.scatter(instance[:,0],instance[:,1], s=2)
+    ax.scatter(Y[:,0],Y[:,1], s=1)
     for i in range(len(label)):
-        ax.annotate(str(i), (label[i,0],label[i,1]))
+        ax.annotate(str(i), (X[i,0],X[i,1]))
     plt.savefig(fname)
     plt.close()
 
 ## plot with hyper-lines
-def plot_arrangements(label,instance,args,fname=None):
+def plot_arrangements(label,instance,ranking=None,fname=None,dim=2):
     fig = plt.figure()
-    args.maxx = 1.0
-    args.size = 1
-    dm = distance_matrix(label,instance) # Euclid
-    ranking = np.array( [np.argsort(dm[:,k]) for k in range(dm.shape[1])] )
-    if args.dim == 2:
+    pca = PCA(n_components=dim)
+    size = 1
+    P = pca.fit(label)
+    X = P.transform(label)
+    Y = P.transform(instance)
+    if dim == 2:
         ax = fig.add_subplot(1, 1, 1)
         ax.set_aspect('equal')
+        ax.set_xlim(-1.1, 1.1)
+        ax.set_ylim(-1.1, 1.1)
         #ax.set_axis_off()
-        plt.xlim(-1.1*args.maxx, 1.1*args.maxx)
-        plt.ylim(-1.1*args.maxx, 1.1*args.maxx)
-        P = [Point(*label[i]) for i in range(len(label))]
+        P = [Point(*X[i]) for i in range(len(label))]
         for i in range(len(label)):
             plt.plot(*zip(P[i]), 'o')
             plt.text(*P[i], i, ha='right', va='top')
@@ -254,7 +325,7 @@ def plot_arrangements(label,instance,args,fname=None):
         col = np.arange(len(instance))
         cmap = plt.cm.rainbow
         norm = plt.Normalize(min(col),max(col))
-        sc = ax.scatter(instance[:,0], instance[:,1], c=col, s=args.size, cmap=cmap, norm=norm)
+        sc = ax.scatter(Y[:,0], Y[:,1], c=col, s=size, cmap=cmap, norm=norm)
         annot = ax.annotate("", xy=(0,0), xytext=(20,20),textcoords="offset points",
                             bbox=dict(boxstyle="round", fc="w"),arrowprops=dict(arrowstyle="->"))
         annot.set_visible(False)
@@ -278,13 +349,12 @@ def plot_arrangements(label,instance,args,fname=None):
                         annot.set_visible(False)
                         fig.canvas.draw_idle()
         fig.canvas.mpl_connect("motion_notify_event", hover)
-    elif args.dim == 3:
+    elif dim == 3:
         ax = Axes3D(fig)
-        ax.plot(label[:,0],label[:,1],label[:,2],marker="o",linestyle='None')
-        ax.plot(instance[:,0],instance[:,1],instance[:,2],marker="x",linestyle='None')
-    if args.label and args.instance:
-        plt.title(args.label+"\n"+args.instance)
-#    plt.colorbar()
+        ax.plot(X[:,0],X[:,1],X[:,2],marker="o",linestyle='None')
+        ax.plot(Y[:,0],Y[:,1],Y[:,2],marker="x",linestyle='None')
+#    if args.label and args.instance:
+#        plt.title(args.label+"\n"+args.instance)
     if fname is not None:
         plt.savefig(fname)
     else:
@@ -308,8 +378,10 @@ if __name__ == '__main__':
     parser.add_argument('--plot', action='store_true',help='plot')
     parser.add_argument('--generate', '-g', action='store_true',help='save data')
     parser.add_argument('--use_dict', action='store_true',help='use dictionary to record distribution (slower but less memory)')
+    parser.add_argument('--compute_wasserstein', '-cw', action='store_true',help='compute Wasserstein distance (very slow)')
+    parser.add_argument('--n_sample_label', '-nl', type=int, default=0, help='number of labels to be revealed for each instance')
     parser.add_argument('--pairwise_comparison_ratio', '-pr', type=float, default=0, help='ratio of pairwise comparison data')
-    parser.add_argument('--outdir', '-o', default='result',
+    parser.add_argument('--outdir', '-o', default='arr_result',
                         help='Directory to output the result')
     args = parser.parse_args()
     args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
@@ -348,10 +420,6 @@ if __name__ == '__main__':
             else:
                 instance = random_from_box(args.dim, args.ninstance) 
             print("instance coordinates randomly generated.")
-        if args.generate:
-            np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
-            np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
-            plot_arrangements(label,instance,args,os.path.join(args.outdir,'output.png'))
 
         ## normalise to norm=1
         #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))
@@ -359,10 +427,16 @@ if __name__ == '__main__':
         
         ranking = reconst_ranking(instance,label)
         print("ranking reconstructed from coordinates.")
-        full_ranking = np.insert(ranking, 0, np.arange(len(instance)), axis=1) ## add instance id
+        full_ranking = np.insert(ranking, 0, np.arange(len(ranking)), axis=1) ## add instance id
         ninstance, nlabel = ranking.shape
         # scatter plot
     #    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
+
+        if args.generate:
+            np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
+            np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
+            plot_arrangements(label,instance,ranking, os.path.join(args.outdir,'arrangement.png'))
+            save_plot(label,instance,os.path.join(args.outdir,'output.png'))
 
     # ground truth ranking
     if args.ranking2:
@@ -388,6 +462,12 @@ if __name__ == '__main__':
         else:
             hist2 = rank_hist(ranking2, args.top_n,args.from_n)
             print("corr: {}, KL: {}".format(np.corrcoef(hist1.ravel(),hist2.ravel())[0,1], symmetrisedKL(hist1.ravel(),hist2.ravel())))
+            if args.compute_wasserstein:
+                start = time.time()
+                print("Wasserstein: {}".format(wasserstein(hist1,hist2,nlabel,args.top_n)))
+                elapsed_time = time.time() - start
+                print ("Wasserstein distance computation took :{} [sec]".format(elapsed_time))
+
         print("ranked at {}: {}".format(args.from_n+1, rank_hist(ranking2, args.from_n+1,args.from_n)))
 
     #
@@ -403,8 +483,14 @@ if __name__ == '__main__':
         np.savetxt(os.path.join(args.outdir,"ranking.csv"), full_ranking, fmt='%d', delimiter=",")
         if args.pairwise_comparison_ratio>0:
             pairwise_comparisons = make_pairwise_comparison(full_ranking, args.top_n)
-            sampled_ranking = random_sample_ranking(pairwise_comparisons, ratio=args.pairwise_comparison_ratio)
+            sampled_ranking = random_sample_pairwise_comparison(pairwise_comparisons, ratio=args.pairwise_comparison_ratio)
             np.savetxt(os.path.join(args.outdir,'pairwise_comparison.csv'), sampled_ranking, fmt='%d', delimiter=',')
+        if args.n_sample_label>0:
+            sampled_ranking = random_sample_ranking(ranking, args.n_sample_label)
+            print(sampled_ranking.shape, sampled_ranking[0])
+            full_sampled_ranking = np.insert(sampled_ranking, 0, np.arange(len(sampled_ranking)), axis=1) ## add instance id
+            np.savetxt(os.path.join(args.outdir,'train_ranking.csv'), full_sampled_ranking, fmt='%d', delimiter=',')
+
 
 # %%
 #%% test

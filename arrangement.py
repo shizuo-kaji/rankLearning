@@ -50,17 +50,18 @@ def coset_kendall(r1,r2):
 def wasserstein(p,q, nlabels, top_n, reg=1e-2):
     import ot, ot.plot
     eps = 1e-10
-    N = np.prod([nlabels-i for i in range(top_n)])
+    _top_n = min(nlabels,top_n)
+    N = np.prod([nlabels-i for i in range(_top_n)])
 #    print(N)
     M = np.zeros( (N,N) )
-    mask = np.ones( nlabels**top_n, dtype=np.bool)
+    mask = np.ones( nlabels**_top_n, dtype=np.bool)
     ii=0
-    for i,r1 in enumerate(itertools.product(range(nlabels), repeat=top_n)):
+    for i,r1 in enumerate(itertools.product(range(nlabels), repeat=_top_n)):
         if(len(set(r1)) != len(r1) ):
             mask[i] = False
         else:
             jj = 0
-            for j,r2 in enumerate(itertools.product(range(nlabels), repeat=top_n)):
+            for j,r2 in enumerate(itertools.product(range(nlabels), repeat=_top_n)):
                 if(len(set(r2)) == len(r2) ):
 #                    print((i,j),r1,r2)
                     M[ii,jj]=coset_kendall(r1,r2)
@@ -76,6 +77,14 @@ def wasserstein(p,q, nlabels, top_n, reg=1e-2):
     return(ot.bregman.sinkhorn2(P/P.sum(),Q/Q.sum(),M,reg=reg))
 
 #%%
+def uniform_ranking(n_label,n_instance):
+    import math
+    n_each = n_instance//math.factorial(n_label)
+    L=[]
+    for r in itertools.permutations(range(n_label)):
+        for i in range(n_each):
+            L.append(r)
+    return(np.array(L,dtype=np.int32))
 
 def random_from_box(dim,n_samples):    ## [-1,1]
     return( np.random.rand(n_samples,dim)*2-1 )
@@ -145,7 +154,7 @@ def normalise_hist(p):
     return(normalised)
     
 
-## estimate ranking distribution from arrangement
+## estimate ranking distribution from arrangement (label coordinates)
 def estimate_vol(label,top_n=3,from_n=0,folds=3,eps=1e-5,max_iter=2000,n=1000):
     n_label=label.shape[0]
     _top_n = min(top_n,n_label)
@@ -229,6 +238,19 @@ def rank_hist2(ranking,top_n=99,from_n=0):
             hist[u] = 1/ninstances
     return(hist)
 
+# focus on a specified subset of labels: (labels are re-indexed from 0)
+def sub_ranking(ranking, labels=None):
+    if labels is None:
+        return ranking
+    else:
+        n = np.max(ranking)+1
+        L = np.zeros(n,dtype=np.int32)
+        for i in range(n):
+            L[i] = labels.index(i) if i in labels else -1
+        A = L[ranking]
+        return(A[A != -1].reshape(len(ranking),len(labels)))
+
+
 # compare full rankings: return (acc for top 1, acc for top1&2, ...)
 def compare_rankings(rank1,rank2,top_n=99,from_n=0):
     _top_n = min(top_n,rank1.shape[1],rank2.shape[1])
@@ -283,31 +305,38 @@ def side_of_line(p, q, mint=-100, maxt=100):
 
 ## plot the first two principal components in the plane
 def save_plot(label,instance,fname):
-    pca = PCA(n_components=2)
-    P = pca.fit(label)
-    X = P.transform(label)
-    Y = P.transform(instance)
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
     ax.set_aspect('equal')
-#    plt.xlim(-1.1, 1.1)
-#    plt.ylim(-1.1, 1.1)
+    if instance.shape[1]>2:
+        pca = PCA(n_components=2)
+        P = pca.fit(label)
+        X = P.transform(label)
+        Y = P.transform(instance)
+    else:
+        X = label
+        Y = instance
+        plt.xlim(-1.1, 1.1)
+        plt.ylim(-1.1, 1.1)
+    ax.scatter(Y[:,0],Y[:,1], s=1, alpha=0.5)
     ax.plot(X[:,0],X[:,1],marker="x",linestyle='None',c='r')
 #    ax.plot(instance[:,0],instance[:,1],marker="o",linestyle='None')
-    ax.scatter(Y[:,0],Y[:,1], s=1)
     for i in range(len(label)):
         ax.annotate(str(i), (X[i,0],X[i,1]))
     plt.savefig(fname)
     plt.close()
 
 ## plot with hyper-lines
-def plot_arrangements(label,instance,ranking=None,fname=None,dim=2):
+def plot_arrangements(label,instance,ranking=None,fname=None,dim=2,size=1):
     fig = plt.figure()
-    pca = PCA(n_components=dim)
-    size = 1
-    P = pca.fit(label)
-    X = P.transform(label)
-    Y = P.transform(instance)
+    if instance.shape[1]>2:
+        pca = PCA(n_components=dim)
+        P = pca.fit(label)
+        X = P.transform(label)
+        Y = P.transform(instance)
+    else:
+        X = label
+        Y = instance
     if dim == 2:
         ax = fig.add_subplot(1, 1, 1)
         ax.set_aspect('equal')
@@ -325,7 +354,8 @@ def plot_arrangements(label,instance,ranking=None,fname=None,dim=2):
         col = np.arange(len(instance))
         cmap = plt.cm.rainbow
         norm = plt.Normalize(min(col),max(col))
-        sc = ax.scatter(Y[:,0], Y[:,1], c=col, s=size, cmap=cmap, norm=norm)
+        sc = ax.scatter(Y[:,0], Y[:,1], c='b', s=size)
+        #sc = ax.scatter(Y[:,0], Y[:,1], c=col, s=size, cmap=cmap, norm=norm)
         annot = ax.annotate("", xy=(0,0), xytext=(20,20),textcoords="offset points",
                             bbox=dict(boxstyle="round", fc="w"),arrowprops=dict(arrowstyle="->"))
         annot.set_visible(False)
@@ -348,7 +378,8 @@ def plot_arrangements(label,instance,ranking=None,fname=None,dim=2):
                     if vis:
                         annot.set_visible(False)
                         fig.canvas.draw_idle()
-        fig.canvas.mpl_connect("motion_notify_event", hover)
+        if fname is not None:
+            fig.canvas.mpl_connect("motion_notify_event", hover)
     elif dim == 3:
         ax = Axes3D(fig)
         ax.plot(X[:,0],X[:,1],X[:,2],marker="o",linestyle='None')
@@ -359,25 +390,28 @@ def plot_arrangements(label,instance,ranking=None,fname=None,dim=2):
         plt.savefig(fname)
     else:
         plt.show()
+    plt.close()
 
 #%%
 if __name__ == '__main__':
     # command line argument parsing
     parser = argparse.ArgumentParser(description='Multi-Perceptron classifier/regressor')
-    parser.add_argument('--label', '-b', help='Path to label coordinates csv file')
-    parser.add_argument('--instance', '-p', help='Path to point coordinates csv file')
+    parser.add_argument('--label', '-l', help='Path to label coordinates csv file')
+    parser.add_argument('--instance', '-i', help='Path to point coordinates csv file')
     parser.add_argument('--ranking1', '-r1', help='Path to full ranking csv file to compare distribution')
     parser.add_argument('--ranking2', '-r2', help='Path to full ranking csv file to compare distribution')
     parser.add_argument('--top_n', '-tn', default=5, type=int, help='focus on top n rankings')
     parser.add_argument('--from_n', '-fn', default=0, type=int, help='focus on rankings from')
     parser.add_argument('--sample_method', '-m', default='ball', type=str, help='random sampling method')
-    parser.add_argument('--maxx', default=1.0, help='max coordinate in each dimension')
+    parser.add_argument('--epsilon', '-eps', type=float, default=1e-5, help='convergence tolerance for volume estimation')
     parser.add_argument('--dim', '-d', default=2, type=int, help='dimension')
     parser.add_argument('--ninstance', '-np', default=1000, type=int, help='number of random instances')
     parser.add_argument('--nlabel', '-nb', default=10, type=int, help='number of labels')
+    parser.add_argument('--focus_labels', '-fl', default=None, type=int, nargs="*", help='indices of focusing labels')
     parser.add_argument('--plot', action='store_true',help='plot')
     parser.add_argument('--generate', '-g', action='store_true',help='save data')
     parser.add_argument('--use_dict', action='store_true',help='use dictionary to record distribution (slower but less memory)')
+    parser.add_argument('--uniform_ranking', '-u', action='store_true',help='generate uniform ranking')
     parser.add_argument('--compute_wasserstein', '-cw', action='store_true',help='compute Wasserstein distance (very slow)')
     parser.add_argument('--n_sample_label', '-nl', type=int, default=0, help='number of labels to be revealed for each instance')
     parser.add_argument('--pairwise_comparison_ratio', '-pr', type=float, default=0, help='ratio of pairwise comparison data')
@@ -385,54 +419,77 @@ if __name__ == '__main__':
                         help='Directory to output the result')
     args = parser.parse_args()
     args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
-    if args.generate:
-        os.makedirs(args.outdir, exist_ok=True)
+
+    if args.focus_labels is not None:
+        print("extract ranking for labels: ", args.focus_labels)
 
     # ranking from model
+    ranking = None
     if args.ranking1:
-        full_ranking = np.loadtxt(args.ranking1,delimiter=",").astype(np.int32)
+        full_ranking = np.loadtxt(args.ranking1,delimiter=",").astype(np.int32)            
         ranking = full_ranking[:,1:]
+        if args.focus_labels is not None:
+            ranking = sub_ranking(ranking, args.focus_labels)
         ninstance = (full_ranking[:,0]).max()+1
         nlabel = ranking.max()+1
         print("ranking loaded from ", args.ranking1)
     else:
         if args.label:
             label = pd.read_csv(args.label, header=None).values
+            if args.focus_labels is not None:
+                label = label[args.focus_labels]
+            nlabel = len(label)
             args.dim = label.shape[1]
             print("label coordinates loaded from: ",args.label)
-        else:
+        elif args.generate:
             if args.sample_method == 'ball':
                 label = random_from_ball(args.dim, args.nlabel)
             elif args.sample_method == 'box':
                 label = random_from_box(args.dim, args.nlabel)
             elif args.sample_method == 'equal': # equally spaced
-                X = np.linspace(-1,1,int(np.sqrt(args.nlabel)))
+                X = np.linspace(-1,1,int(args.nlabel**(1./args.dim)))
                 x,y = np.meshgrid(X,X)
                 label = np.stack([x.ravel(),y.ravel()], axis=-1)
+            nlabel = len(label)
             print("label coordinates randomly generated.")
+        else:
+            nlabel = None
         if args.instance:
             instance = pd.read_csv(args.instance, header=None).values
             args.dim = instance.shape[1]
+            ninstance = len(instance)
             print("instance coordinates loaded from: ",args.instance)
-        else:
+        elif args.generate:
             if args.sample_method == 'ball':
                 instance = random_from_ball(args.dim, args.ninstance) 
-            else:
+            elif args.sample_method == 'box':
                 instance = random_from_box(args.dim, args.ninstance) 
+            elif args.sample_method == 'equal': # equally spaced
+                X = np.linspace(-1,1,int(args.ninstance**(1./args.dim)))
+                x,y = np.meshgrid(X,X)
+                instance = np.stack([x.ravel(),y.ravel()], axis=-1)
+            ninstance = len(instance)
             print("instance coordinates randomly generated.")
+        else:
+            ninstance = None
 
         ## normalise to norm=1
         #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))
         #instance /= np.sqrt(np.sum(instance**2,axis=1,keepdims=True))
         
-        ranking = reconst_ranking(instance,label)
-        print("ranking reconstructed from coordinates.")
-        full_ranking = np.insert(ranking, 0, np.arange(len(ranking)), axis=1) ## add instance id
-        ninstance, nlabel = ranking.shape
+        if args.generate:
+            if args.uniform_ranking:
+                ranking = uniform_ranking(args.nlabel,args.ninstance)
+                print("uniform ranking generated.")
+            else:
+                ranking = reconst_ranking(instance,label)
+                print("ranking reconstructed from coordinates.")
+            full_ranking = np.insert(ranking, 0, np.arange(len(ranking)), axis=1) ## add instance id
         # scatter plot
     #    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
 
-        if args.generate:
+        if args.generate and not args.uniform_ranking:
+            os.makedirs(args.outdir, exist_ok=True)
             np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
             np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
             plot_arrangements(label,instance,ranking, os.path.join(args.outdir,'arrangement.png'))
@@ -441,15 +498,18 @@ if __name__ == '__main__':
     # ground truth ranking
     if args.ranking2:
         ranking2 = pd.read_csv(args.ranking2, header=None).iloc[:,1:].values
+        if args.focus_labels is not None:
+            ranking2 = sub_ranking(ranking2, args.focus_labels)
         print("ground truth ranking loaded from: ", args.ranking2)
         if args.label:
             start = time.time()
             if args.use_dict:
-                hist1,err = estimate_vol2(label,args.top_n,args.from_n)
+                hist1,err = estimate_vol2(label,args.top_n,args.from_n,eps=args.epsilon)
             else:
-                hist1,err = estimate_vol(label,args.top_n,args.from_n)
+                hist1,err = estimate_vol(label,args.top_n,args.from_n,eps=args.epsilon)
             elapsed_time = time.time() - start
             print ("volume estimation took :{} with error {}".format(elapsed_time,err))
+            print("(r1.vol) {}".format([hist1[i].sum() for i in range(len(hist1))]))
         else:
             if args.use_dict:
                 hist1 = rank_hist2(ranking, args.top_n,args.from_n)
@@ -468,14 +528,12 @@ if __name__ == '__main__':
                 elapsed_time = time.time() - start
                 print ("Wasserstein distance computation took :{} [sec]".format(elapsed_time))
 
-        print("ranked at {}: {}".format(args.from_n+1, rank_hist(ranking2, args.from_n+1,args.from_n)))
+        print("(r2) ranked at {}: {}".format(args.from_n+1, rank_hist(ranking2, args.from_n+1,args.from_n)))
 
     #
     print("(#instance, #label)", ninstance, nlabel)
-    print("ranked at {}: {}".format(args.from_n+1, rank_hist(ranking, args.from_n+1,args.from_n)))
-#    vol,err = estimate_vol(label)
-#    print([np.sum(v) for v in vol])
-#    print(err,vol[vol>0]*8)
+    if ranking is not None:
+        print("(r1) ranked at {}: {}".format(args.from_n+1, rank_hist(ranking, args.from_n+1,args.from_n)))
 
     ## save ranking to file
     if args.generate:
@@ -485,19 +543,11 @@ if __name__ == '__main__':
             pairwise_comparisons = make_pairwise_comparison(full_ranking, args.top_n)
             sampled_ranking = random_sample_pairwise_comparison(pairwise_comparisons, ratio=args.pairwise_comparison_ratio)
             np.savetxt(os.path.join(args.outdir,'pairwise_comparison.csv'), sampled_ranking, fmt='%d', delimiter=',')
-        if args.n_sample_label>0:
-            sampled_ranking = random_sample_ranking(ranking, args.n_sample_label)
-            print(sampled_ranking.shape, sampled_ranking[0])
-            full_sampled_ranking = np.insert(sampled_ranking, 0, np.arange(len(sampled_ranking)), axis=1) ## add instance id
-            np.savetxt(os.path.join(args.outdir,'train_ranking.csv'), full_sampled_ranking, fmt='%d', delimiter=',')
+    if args.n_sample_label>0:
+        os.makedirs(args.outdir, exist_ok=True)
+        sampled_ranking = random_sample_ranking(ranking, args.n_sample_label)
+        print(sampled_ranking.shape, sampled_ranking[0])
+        full_sampled_ranking = np.insert(sampled_ranking, 0, np.arange(len(sampled_ranking)), axis=1) ## add instance id
+        np.savetxt(os.path.join(args.outdir,'train{}.csv'.format(args.n_sample_label)), full_sampled_ranking, fmt='%d', delimiter=',')
 
 
-# %%
-#%% test
-# import time
-# label = pd.read_csv("result/brands-4uniform.csv", header=None).iloc[:,:2].values
-# start = time.time()
-# v,err = estimate_vol(label,max_iter=2000,n=500)
-# print(np.sum(v),v[0,1,2],err)
-# elapsed_time = time.time() - start
-# print ("elapsed_time:{0}".format(elapsed_time) + "[sec]")

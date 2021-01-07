@@ -64,6 +64,7 @@ class Evaluator(extensions.Evaluator):
             np.savetxt(os.path.join(self.args.outdir,"out_instances{:0>4}.csv".format(self.count)), cinstance, fmt='%1.5f', delimiter=",")
             full_ranking = np.insert(ranking, 0, np.arange(self.args.ninstance), axis=1) ## add instance id
             np.savetxt(os.path.join(self.args.outdir,"ranking{:0>4}.csv".format(self.count)), full_ranking, fmt='%d', delimiter=",")
+#            plot_arrangements(clabel,cinstance,fname=os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)),size=5)
             save_plot(clabel,cinstance,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
             print("accuracy: {}, corr: {}, KL: {} \n".format(acc,corr,KL))
         return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1], "myval/accN": acc[-1], "myval/KL": KL}
@@ -138,7 +139,7 @@ class Updater(chainer.training.StandardUpdater):
         if self.args.lambda_ball>0: # coordinates should be in the unit ball
             loss_domain = F.average(F.relu(F.sum(label**2, axis=1)-1)) # for labels
             p = np.random.choice(self.args.ninstance,min(self.args.batchsize,self.args.ninstance), replace=False)
-            loss_domain = F.average(F.relu(F.sum(instance[p]**2, axis=1)-1)) # for labels
+            loss_domain += F.average(F.relu(F.sum(instance[p]**2, axis=1)-1)) # for instances
             chainer.report({'loss_domain': loss_domain}, self.coords)
             loss += self.args.lambda_ball * loss_domain
         elif self.args.lambda_box>0: # coordinates should be in [-1, 1]
@@ -163,13 +164,13 @@ def main():
     parser = argparse.ArgumentParser(description='Ranking learning')
     parser.add_argument('train', help='Path to ranking csv file')
     parser.add_argument('--val', default=None, help='Path to ranking csv file')
-    parser.add_argument('--label', '-b', help='Path to initial label coordinates csv file')
+    parser.add_argument('--label', '-l', help='Path to initial label coordinates csv file')
     parser.add_argument('--instance', '-i', help='Path to initial point coordinates csv file')
     parser.add_argument('--outdir', '-o', default='result', help='Directory to output the result')
     #
     parser.add_argument('--top_n', '-tn', type=int, default=99,
                         help='Use only top n rankings for each person')
-    parser.add_argument('--val_top_n', '-vtn', type=int, default=3,
+    parser.add_argument('--val_top_n', '-vtn', type=int, default=5,
                         help='Use only top n rankings for each person in the evaluation')
     parser.add_argument('--batchsize', '-bs', type=int, default=50,
                         help='Number of samples in each mini-batch')
@@ -236,7 +237,7 @@ def main():
             chainer.print_runtime_info()
         else:
             primary = False
-        print("process {}".format(comm.rank))
+        #print("process {}".format(comm.rank))
     else:
         primary = True
         print(args)
@@ -259,6 +260,7 @@ def main():
     ## initialise the parameters
     if args.label:
         xb = np.loadtxt(args.label, delimiter=",")
+        #print("initial label coordinates loaded from: ", args.label)
     elif args.lambda_box>0:
         xb = random_from_box(args.dim,args.nlabel)
     else:
@@ -266,6 +268,7 @@ def main():
         #xb = random_from_sphere(args.dim,args.nlabel, norm=0.9)
     if args.instance:
         xpl = np.loadtxt(args.instance, delimiter=",")
+        #print("initial instance coordinates loaded from: ", args.instance)
     elif args.lambda_box>0:
         xb = random_from_box(args.dim,args.ninstance)
     else:

@@ -37,8 +37,8 @@ class Evaluator(extensions.Evaluator):
         super(Evaluator, self).__init__(*args, **kwargs)
         self.args = params['args']
         self.hist_top_n = params['top_n']
-        self.org_ranking = params['ranking'][:,1:]   # remove ID column
-        self.org_hist=rank_hist(self.org_ranking,self.hist_top_n)
+        self.val_ranking = sub_ranking(params['ranking'][:,1:], self.args.focus_labels)   # remove ID column
+        self.val_hist = rank_hist(self.val_ranking,self.hist_top_n)
         self.count = 0
     def evaluate(self, save=False):
         coords = self.get_target('coords')
@@ -50,22 +50,24 @@ class Evaluator(extensions.Evaluator):
             pdat = coords.W.data
         cinstance = pdat[self.args.nlabel:]
         clabel = pdat[:self.args.nlabel]
+        if self.args.focus_labels is not None:
+            clabel = clabel[self.args.focus_labels]
         ranking = reconst_ranking(cinstance,clabel)
-        acc = compare_rankings(ranking,self.org_ranking)
+        acc = compare_rankings(ranking,self.val_ranking)
         hist,err = estimate_vol(clabel,self.hist_top_n)
-        corr = np.corrcoef(hist.ravel(),self.org_hist.ravel())[0,1]
-        KL = symmetrisedKL(hist.ravel(),self.org_hist.ravel())
+        corr = np.corrcoef(hist.ravel(),self.val_hist.ravel())[0,1]
+        KL = symmetrisedKL(hist.ravel(),self.val_hist.ravel())
         with open(os.path.join(self.args.outdir,"accuracy.txt"), 'a') as f:
             print("accuracy: {}, corr: {}, KL: {} \n".format(acc,corr,KL), file=f)
         self.count += 1
         loss_radius = F.average(coords.W ** 2)
         if self.args.save_evaluation or save:
-            np.savetxt(os.path.join(self.args.outdir,"out_labels{:0>4}.csv".format(self.count)), clabel, fmt='%1.5f', delimiter=",")
-            np.savetxt(os.path.join(self.args.outdir,"out_instances{:0>4}.csv".format(self.count)), cinstance, fmt='%1.5f', delimiter=",")
+            np.savetxt(os.path.join(self.args.outdir,"labels{:0>4}.csv".format(self.count)), pdat[:self.args.nlabel], fmt='%1.5f', delimiter=",")
+            np.savetxt(os.path.join(self.args.outdir,"instances{:0>4}.csv".format(self.count)), cinstance, fmt='%1.5f', delimiter=",")
             full_ranking = np.insert(ranking, 0, np.arange(self.args.ninstance), axis=1) ## add instance id
             np.savetxt(os.path.join(self.args.outdir,"ranking{:0>4}.csv".format(self.count)), full_ranking, fmt='%d', delimiter=",")
-#            plot_arrangements(clabel,cinstance,fname=os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)),size=5)
-            save_plot(clabel,cinstance,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
+#            plot_arrangements(pdat[:self.args.nlabel],cinstance,fname=os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)),size=5)
+            save_plot(pdat[:self.args.nlabel],cinstance,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
             print("accuracy: {}, corr: {}, KL: {} \n".format(acc,corr,KL))
         return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1], "myval/accN": acc[-1], "myval/KL": KL}
 
@@ -170,8 +172,6 @@ def main():
     #
     parser.add_argument('--top_n', '-tn', type=int, default=99,
                         help='Use only top n rankings for each person')
-    parser.add_argument('--val_top_n', '-vtn', type=int, default=5,
-                        help='Use only top n rankings for each person in the evaluation')
     parser.add_argument('--batchsize', '-bs', type=int, default=50,
                         help='Number of samples in each mini-batch')
     parser.add_argument('--epoch', '-e', type=int, default=100,
@@ -201,6 +201,10 @@ def main():
     parser.add_argument('--repel_start', '-rs', type=float, default=0.3,
                         help='start increasing repelling weight after this times the total epochs')
 
+    # validation
+    parser.add_argument('--val_top_n', '-vtn', type=int, default=5,
+                        help='Use only top n rankings for each person in the evaluation')
+    parser.add_argument('--focus_labels', '-fl', default=None, type=int, nargs="*", help='indices of focusing labels for validation')
     parser.add_argument('--vis_freq', '-vf', type=int, default=10,
                         help='evaluation frequency in epochs')
     parser.add_argument('--save_evaluation', '-se', action='store_true',help='output evaluation results')

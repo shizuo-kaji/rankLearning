@@ -11,6 +11,7 @@ from sympy.geometry import Point, Circle, Triangle, Segment, Line
 from scipy.spatial import distance_matrix
 from scipy.stats import entropy
 from sklearn.decomposition import PCA
+from sklearn.metrics import confusion_matrix,classification_report
 
 import itertools
 import matplotlib.pyplot as plt
@@ -18,6 +19,7 @@ import matplotlib.pylab as pl
 import argparse
 import pandas as pd
 import os,time
+import tqdm
 from datetime import datetime as dt
 from chainerui.utils import save_args
 #from numba import jit,njit,prange
@@ -56,7 +58,7 @@ def wasserstein(p,q, nlabels, top_n, reg=1e-2):
     M = np.zeros( (N,N) )
     mask = np.ones( nlabels**_top_n, dtype=np.bool)
     ii=0
-    for i,r1 in enumerate(itertools.product(range(nlabels), repeat=_top_n)):
+    for i,r1 in tqdm.tqdm(enumerate(itertools.product(range(nlabels), repeat=_top_n)), total=nlabels**_top_n):
         if(len(set(r1)) != len(r1) ):
             mask[i] = False
         else:
@@ -250,6 +252,19 @@ def sub_ranking(ranking, labels=None):
         A = L[ranking]
         return(A[A != -1].reshape(len(ranking),len(labels)))
 
+# subset of ranking matching the given partial ranking
+def conditioned(ranking, partial):
+    L = []
+    ord = np.arange(len(partial))
+    for i,r in enumerate(sub_ranking(ranking, partial)):
+        if np.allclose(r,ord):
+            L.append(i)
+    return ranking[L]
+
+# return ranking positions of the specified labels
+def inverse(ranking, labels):
+    L=np.argsort(ranking, axis=1)
+    return(L[:,labels])
 
 # compare full rankings: return (acc for top 1, acc for top1&2, ...)
 def compare_rankings(rank1,rank2,top_n=99,from_n=0):
@@ -267,8 +282,10 @@ def make_pairwise_comparison(full_ranking,top_n=99):
     dat = []
     for l in full_ranking:
         for i in range(1,min(len(l)-1,top_n)):  # make a string of ranking to pairwise comparisons
-            for j in range(i+1,min(len(l),top_n+1)):
-                dat.append([l[0],l[i],l[j]]) # pid,a>b
+            if l[i] >= 0:
+                for j in range(i+1,min(len(l),top_n+1)):
+                    if l[j] >= 0:
+                        dat.append([l[0],l[i],l[j]]) # pid,a>b
     return(np.array(dat,dtype=np.int32))
 
 # for each instance, randomly choose labels and reveal only ranking among them
@@ -405,21 +422,23 @@ if __name__ == '__main__':
     parser.add_argument('--sample_method', '-m', default='ball', type=str, help='random sampling method')
     parser.add_argument('--epsilon', '-eps', type=float, default=1e-5, help='convergence tolerance for volume estimation')
     parser.add_argument('--dim', '-d', default=2, type=int, help='dimension')
-    parser.add_argument('--ninstance', '-np', default=1000, type=int, help='number of random instances')
-    parser.add_argument('--nlabel', '-nb', default=10, type=int, help='number of labels')
+    parser.add_argument('--ninstance', '-ni', default=1000, type=int, help='number of random instances')
+    parser.add_argument('--nlabel', '-nl', default=10, type=int, help='number of labels')
     parser.add_argument('--focus_labels', '-fl', default=None, type=int, nargs="*", help='indices of focusing labels')
     parser.add_argument('--plot', action='store_true',help='plot')
     parser.add_argument('--generate', '-g', action='store_true',help='save data')
     parser.add_argument('--use_dict', action='store_true',help='use dictionary to record distribution (slower but less memory)')
     parser.add_argument('--uniform_ranking', '-u', action='store_true',help='generate uniform ranking')
     parser.add_argument('--compute_wasserstein', '-cw', action='store_true',help='compute Wasserstein distance (very slow)')
-    parser.add_argument('--n_sample_label', '-nl', type=int, default=0, help='number of labels to be revealed for each instance')
+    parser.add_argument('--marginal', '-mr', action='store_true',help='plot marginal ranking positions')
+    parser.add_argument('--n_sample_label', '-ns', type=int, default=0, help='number of labels to be revealed for each instance')
     parser.add_argument('--pairwise_comparison_ratio', '-pr', type=float, default=0, help='ratio of pairwise comparison data')
-    parser.add_argument('--outdir', '-o', default='arr_result',
-                        help='Directory to output the result')
+    parser.add_argument('--outdir', '-o', default='arr_result',help='Directory to output the result')
+    parser.add_argument('--verbose', '-v', action='store_true')
     args = parser.parse_args()
     args.outdir = os.path.join(args.outdir, dt.now().strftime('%m%d_%H%M'))
 
+    print("\n Stats for Top-{} rankings...".format(args.top_n))
     if args.focus_labels is not None:
         print("extract ranking for labels: ", args.focus_labels)
 
@@ -428,8 +447,7 @@ if __name__ == '__main__':
     if args.ranking1:
         full_ranking = np.loadtxt(args.ranking1,delimiter=",").astype(np.int32)            
         ranking = full_ranking[:,1:]
-        if args.focus_labels is not None:
-            ranking = sub_ranking(ranking, args.focus_labels)
+        ranking = sub_ranking(ranking, args.focus_labels)
         ninstance = (full_ranking[:,0]).max()+1
         nlabel = ranking.max()+1
         print("ranking loaded from ", args.ranking1)
@@ -476,30 +494,27 @@ if __name__ == '__main__':
         ## normalise to norm=1
         #label /= np.sqrt(np.sum(label**2,axis=1,keepdims=True))
         #instance /= np.sqrt(np.sum(instance**2,axis=1,keepdims=True))
-        
+        if ninstance is not None and nlabel is not None:        
+            ranking = reconst_ranking(instance,label)
+            print("ranking reconstructed from coordinates.")
+
         if args.generate:
             if args.uniform_ranking:
                 ranking = uniform_ranking(args.nlabel,args.ninstance)
                 print("uniform ranking generated.")
-            else:
-                ranking = reconst_ranking(instance,label)
-                print("ranking reconstructed from coordinates.")
-            full_ranking = np.insert(ranking, 0, np.arange(len(ranking)), axis=1) ## add instance id
-        # scatter plot
-    #    save_plot(label,instance,os.path.join(args.outdir,'output.png'))
 
         if args.generate and not args.uniform_ranking:
             os.makedirs(args.outdir, exist_ok=True)
             np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
             np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
+        if (args.plot or args.generate) and nlabel is not None and ninstance is not None:
             plot_arrangements(label,instance,ranking, os.path.join(args.outdir,'arrangement.png'))
             save_plot(label,instance,os.path.join(args.outdir,'output.png'))
 
     # ground truth ranking
     if args.ranking2:
         ranking2 = pd.read_csv(args.ranking2, header=None).iloc[:,1:].values
-        if args.focus_labels is not None:
-            ranking2 = sub_ranking(ranking2, args.focus_labels)
+        ranking2 = sub_ranking(ranking2, args.focus_labels)
         print("ground truth ranking loaded from: ", args.ranking2)
         if args.label:
             start = time.time()
@@ -508,8 +523,9 @@ if __name__ == '__main__':
             else:
                 hist1,err = estimate_vol(label,args.top_n,args.from_n,eps=args.epsilon)
             elapsed_time = time.time() - start
-            print ("volume estimation took :{} with error {}".format(elapsed_time,err))
-            print("(r1.vol) {}".format([hist1[i].sum() for i in range(len(hist1))]))
+            if args.verbose:
+                print ("volume estimation took :{} with error {}".format(elapsed_time,err))
+                print("(r1.vol) {}".format([hist1[i].sum() for i in range(len(hist1))]))
         else:
             if args.use_dict:
                 hist1 = rank_hist2(ranking, args.top_n,args.from_n)
@@ -526,23 +542,43 @@ if __name__ == '__main__':
                 start = time.time()
                 print("Wasserstein: {}".format(wasserstein(hist1,hist2,nlabel,args.top_n)))
                 elapsed_time = time.time() - start
-                print ("Wasserstein distance computation took :{} [sec]".format(elapsed_time))
+                if args.verbose:
+                    print ("Wasserstein distance computation took :{} [sec]".format(elapsed_time))
 
-        print("(r2) ranked at {}: {}".format(args.from_n+1, rank_hist(ranking2, args.from_n+1,args.from_n)))
+        if args.verbose:
+            print("(r2) ranked at {}: {}".format(args.from_n+1, rank_hist(ranking2, args.from_n+1,args.from_n)))
 
     #
     print("(#instance, #label)", ninstance, nlabel)
-    if ranking is not None:
+    if ranking is not None and args.verbose:
         print("(r1) ranked at {}: {}".format(args.from_n+1, rank_hist(ranking, args.from_n+1,args.from_n)))
 
     ## save ranking to file
     if args.generate:
         save_args(args, args.outdir)
+        full_ranking = np.insert(ranking, 0, np.arange(len(ranking)), axis=1) ## add instance id
         np.savetxt(os.path.join(args.outdir,"ranking.csv"), full_ranking, fmt='%d', delimiter=",")
         if args.pairwise_comparison_ratio>0:
             pairwise_comparisons = make_pairwise_comparison(full_ranking, args.top_n)
             sampled_ranking = random_sample_pairwise_comparison(pairwise_comparisons, ratio=args.pairwise_comparison_ratio)
             np.savetxt(os.path.join(args.outdir,'pairwise_comparison.csv'), sampled_ranking, fmt='%d', delimiter=',')
+
+    # conditional marginal ranking positions
+    if args.marginal:
+        ranking = conditioned(ranking, [2,6]) # 6:egg 2:tuna
+        ranking2 = conditioned(ranking2, [2,6])
+        L1 = inverse(ranking,[1]) # 4:uni
+        L2 = inverse(ranking2,[1])
+        fig = plt.figure(figsize=(10,6))
+        plt.hist([L2.flatten(),L1.flatten()],bins=10, density=True)
+        plt.savefig('positions.png')
+        #plt.savefig(os.path.join(args.outdir,'positions.png'))
+        #np.savetxt(os.path.join(args.outdir,'positions.csv'), L1, fmt='%d', delimiter=',')
+        # C1 = L1>4 #1*(L1>6) + 1*(L1>2)
+        # C2 = L2>4 #1*(L2>6) + 1*(L2>2)
+        # print(confusion_matrix(C1,C2))
+        # print(classification_report(C1,C2, digits=4))
+
     if args.n_sample_label>0:
         os.makedirs(args.outdir, exist_ok=True)
         sampled_ranking = random_sample_ranking(ranking, args.n_sample_label)

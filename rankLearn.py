@@ -96,9 +96,13 @@ class Updater(chainer.training.StandardUpdater):
 
         # interpolation of repelling force among instances and among labels
         if self.is_new_epoch and self.epoch>=self.adjust_start:
-            t =  (self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start) # [0,1]
-            self.lambda_repel_instance = self.args.lambda_repel_instance * np.cos(0.5*np.pi*(1-t)) # increase
-            self.lambda_repel_label = self.args.lambda_repel_label * np.cos(0.5*np.pi*(t)) # decrease
+            if self.adjust_start>=0:
+                t =  (self.epoch-self.adjust_start) / (self.args.epoch-self.adjust_start) # [0,1]
+                self.lambda_repel_instance = self.args.lambda_repel_instance * np.cos(0.5*np.pi*(1-t)) # increase
+                self.lambda_repel_label = self.args.lambda_repel_label * np.cos(0.5*np.pi*(t)) # decrease
+            else:
+                self.lambda_repel_instance = self.args.lambda_repel_instance
+                self.lambda_repel_label = self.args.lambda_repel_label
             chainer.report({'lambda_repel': self.lambda_repel_instance}, self.coords)
 
         ## order consistency loss

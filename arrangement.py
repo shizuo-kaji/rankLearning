@@ -119,7 +119,16 @@ def symmetrisedKL2(p,q):
             KL += q[u]*np.log(2*q[u]/(q[u]))
     return( KL/2 )
 
-# correlation of two distributions
+# correlation
+def cor(p,q, nlabels, top_n):
+    _top_n = min(nlabels,top_n)
+    mask = np.ones( nlabels**_top_n, dtype=np.bool)
+    for i,r1 in (enumerate(itertools.product(range(nlabels), repeat=_top_n))):
+        if(len(set(r1)) != len(r1) ):
+            mask[i] = False
+    return(np.corrcoef(p.ravel()[mask], q.ravel()[mask])[0,1])
+
+# correlation of two distributions (average is not subtracted!)
 def cor2(p,q):
     c = 0
     norm2_p, norm2_q = 0,0
@@ -335,7 +344,7 @@ def save_plot(label,instance,fname):
         Y = instance
         plt.xlim(-1.1, 1.1)
         plt.ylim(-1.1, 1.1)
-    ax.scatter(Y[:,0],Y[:,1], s=1, alpha=0.5)
+    ax.scatter(Y[:,0],Y[:,1], s=1, alpha=0.3)
     ax.plot(X[:,0],X[:,1],marker="x",linestyle='None',c='r')
 #    ax.plot(instance[:,0],instance[:,1],marker="o",linestyle='None')
     for i in range(len(label)):
@@ -451,6 +460,13 @@ if __name__ == '__main__':
         ninstance = (full_ranking[:,0]).max()+1
         nlabel = ranking.max()+1
         print("ranking loaded from ", args.ranking1)
+    elif args.uniform_ranking:
+#        ranking = uniform_ranking(args.nlabel,args.ninstance)
+        ranking = np.array([np.random.permutation(args.nlabel) for i in range(args.ninstance)])
+        ranking = sub_ranking(ranking, args.focus_labels)
+        ninstance = len(ranking)
+        nlabel = ranking.max()+1
+        print("uniform ranking generated.")
     else:
         if args.label:
             label = pd.read_csv(args.label, header=None).values
@@ -496,18 +512,15 @@ if __name__ == '__main__':
         #instance /= np.sqrt(np.sum(instance**2,axis=1,keepdims=True))
         if ninstance is not None and nlabel is not None:        
             ranking = reconst_ranking(instance,label)
+            ranking = sub_ranking(ranking, args.focus_labels)
+            nlabel = ranking.max()+1
             print("ranking reconstructed from coordinates.")
-
-        if args.generate:
-            if args.uniform_ranking:
-                ranking = uniform_ranking(args.nlabel,args.ninstance)
-                print("uniform ranking generated.")
 
         if args.generate and not args.uniform_ranking:
             os.makedirs(args.outdir, exist_ok=True)
             np.savetxt(os.path.join(args.outdir,"instances.csv"), instance , fmt='%1.5f', delimiter=",")
             np.savetxt(os.path.join(args.outdir,"labels.csv"), label , fmt='%1.5f', delimiter=",")
-        if (args.plot or args.generate) and nlabel is not None and ninstance is not None:
+        if args.plot and nlabel is not None and ninstance is not None:
             plot_arrangements(label,instance,ranking, os.path.join(args.outdir,'arrangement.png'))
             save_plot(label,instance,os.path.join(args.outdir,'output.png'))
 
@@ -537,7 +550,7 @@ if __name__ == '__main__':
             print("corr: {}, KL: {}".format(cor2(hist1,hist2), symmetrisedKL2(hist1,hist2)))
         else:
             hist2 = rank_hist(ranking2, args.top_n,args.from_n)
-            print("corr: {}, KL: {}".format(np.corrcoef(hist1.ravel(),hist2.ravel())[0,1], symmetrisedKL(hist1.ravel(),hist2.ravel())))
+            print("corr: {}, KL: {}".format(cor(hist1,hist2, nlabel, args.top_n), symmetrisedKL(hist1.ravel(),hist2.ravel())))
             if args.compute_wasserstein:
                 start = time.time()
                 print("Wasserstein: {}".format(wasserstein(hist1,hist2,nlabel,args.top_n)))

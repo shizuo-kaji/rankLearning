@@ -3,7 +3,8 @@ Learning ranking distributions using hyperplane arrangement
 Written by Shizuo KAJI
 
 Look at the following paper for details:
-- A hyper-surface arrangement model of ranking distributions by S. Kaji, A. Horiguchi, T. Abe, and Y. Watanabe.
+- "A hyper-surface arrangement model of ranking distributions" by
+ S. Kaji, A. Horiguchi, T. Abe (Kyushu University), and Y. Watanabe (ZOZO Technologies), ACM SIGKDD 2021.
 
 # Requirements
 - Python 3: [Anaconda](https://www.anaconda.com/download/) is recommended
@@ -49,6 +50,17 @@ Note that only labels.csv is needed for sampling from the leaned model.
     python rankLearn.py -h
 ```
 
+# Example
+- For the [SUSHI dataset](https://www.kamishima.net/sushi/), a sample embedding setting is
+(--batchsize 50 --epoch 100 --dim 9 --margin 0.01 --learning_rate 0.01 --lambda_ord 1 --lambda_repel_instance 0.0001 --lambda_ball 1)
+
+- For the toy dataset with two items (2label90-10.csv), a sample setting is
+(-b 100 -e 200 -d 2 -m 0.03 -lr 0.1 -lo 10 -lri 1 -lrl 1e-9 -lb 10 -se)
+
+Visualisation of the first two principal components:
+![2Items](https://github.com/shizuo-kaji/rankLearn/blob/master/demo/2label.png?raw=true)
+![10Items(sushi)](https://github.com/shizuo-kaji/rankLearn/blob/master/demo/sushi_d9_t10.png?raw=true)
+
 
 # Evaluating the model
 - To compare the learned model with the data in terms of various metrics,
@@ -76,4 +88,9 @@ The sampled rankings (`ranking.csv`) and instance coordinates (`instances.csv`) 
     python arrangement.py -h
 ```
 
+
+
+
+# TODO
+- Use the Lehmer code for indexing permutations.
 

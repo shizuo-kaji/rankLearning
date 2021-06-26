@@ -113,10 +113,10 @@ def symmetrisedKL2(p,q):
         if u in q:
             KL += p[u]*np.log(2*p[u]/(p[u]+q[u])) + q[u]*np.log(2*q[u]/(p[u]+q[u]))
         else:
-            KL += p[u]*np.log(2*p[u]/(p[u]))
+            KL += p[u]*np.log(2)
     for u in q:
         if u not in p:
-            KL += q[u]*np.log(2*q[u]/(q[u]))
+            KL += q[u]*np.log(2)
     return( KL/2 )
 
 # correlation
@@ -330,7 +330,7 @@ def side_of_line(p, q, mint=-100, maxt=100):
     return zip(p+(q-p)*mint, p+(q-p)*maxt)
 
 ## plot the first two principal components in the plane
-def save_plot(label,instance,fname):
+def save_plot(label,instance,fname, s=5, alpha=0.8):
     fig = plt.figure()
     ax = fig.add_subplot(1, 1, 1)
     ax.set_aspect('equal')
@@ -344,7 +344,7 @@ def save_plot(label,instance,fname):
         Y = instance
         plt.xlim(-1.1, 1.1)
         plt.ylim(-1.1, 1.1)
-    ax.scatter(Y[:,0],Y[:,1], s=1, alpha=0.3)
+    ax.scatter(Y[:,0],Y[:,1], s=s, alpha=alpha)
     ax.plot(X[:,0],X[:,1],marker="x",linestyle='None',c='r')
 #    ax.plot(instance[:,0],instance[:,1],marker="o",linestyle='None')
     for i in range(len(label)):

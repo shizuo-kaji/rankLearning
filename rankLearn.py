@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib as mpl
 mpl.use('Agg')
-
+import sys
 import chainer
 import chainer.functions as F
 import chainer.links as L
@@ -66,7 +66,7 @@ class Evaluator(extensions.Evaluator):
             np.savetxt(os.path.join(self.args.outdir,"instances{:0>4}.csv".format(self.count)), cinstance, fmt='%1.5f', delimiter=",")
             full_ranking = np.insert(ranking, 0, np.arange(self.args.ninstance), axis=1) ## add instance id
             np.savetxt(os.path.join(self.args.outdir,"ranking{:0>4}.csv".format(self.count)), full_ranking, fmt='%d', delimiter=",")
-#            plot_arrangements(pdat[:self.args.nlabel],cinstance,fname=os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)),size=5)
+            #plot_arrangements(pdat[:self.args.nlabel],cinstance,fname=os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)),size=5)
             save_plot(pdat[:self.args.nlabel],cinstance,os.path.join(self.args.outdir,"count{:0>4}.jpg".format(self.count)))
             print("accuracy: {}, corr: {}, KL: {} \n".format(acc,corr,KL))
         return {"myval/radius":loss_radius, "myval/corr": corr, "myval/acc1": acc[0], "myval/acc2": acc[1], "myval/accN": acc[-1], "myval/KL": KL}
@@ -194,9 +194,9 @@ def main():
                         help='annealing strategy')
     parser.add_argument('--optimizer', '-op',choices=optim.keys(),default='Adam',help='optimizer')
                         
-    parser.add_argument('--lambda_ord', '-lo', type=float, default=1,
+    parser.add_argument('--lambda_ord', '-lo', type=float, default=10,
                         help='weight for order consistency')
-    parser.add_argument('--lambda_repel_instance', '-lri', type=float, default=0,
+    parser.add_argument('--lambda_repel_instance', '-lri', type=float, default=1,
                         help='weight for repelling force between instances')
     parser.add_argument('--lambda_repel_label', '-lrl', type=float, default=0,
                         help='weight for repelling force between labels')
@@ -335,6 +335,9 @@ def main():
             trainer.extend(extensions.ExponentialShift('lr', 0.5, optimizer=optimizer), trigger=(args.epoch/args.learning_rate_drop, 'epoch'))
         elif args.optimizer in ['Adam','AdaBound','Eve']:
             trainer.extend(extensions.ExponentialShift("alpha", 0.5, optimizer=optimizer), trigger=(args.epoch/args.learning_rate_drop, 'epoch'))
+
+    with open(os.path.join(args.outdir,"args.txt"), 'w') as fh:
+        fh.write(" ".join(sys.argv))
 
     trainer.run()
     if primary:

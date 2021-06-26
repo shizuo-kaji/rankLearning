@@ -58,8 +58,8 @@ Note that only labels.csv is needed for sampling from the leaned model.
 (-b 100 -e 200 -d 2 -m 0.03 -lr 0.1 -lo 10 -lri 1 -lrl 1e-9 -lb 10 -se)
 
 Visualisation of the first two principal components:
-![2Items](https://github.com/shizuo-kaji/rankLearn/blob/master/demo/2label.png?raw=true)
-![10Items(sushi)](https://github.com/shizuo-kaji/rankLearn/blob/master/demo/sushi_d9_t10.png?raw=true)
+![2Items](https://github.com/shizuo-kaji/rankLearning/blob/master/demo/2label.png?raw=true)
+![10Items(sushi)](https://github.com/shizuo-kaji/rankLearning/blob/master/demo/sushi_d9_t10.png?raw=true)
 
 
 # Evaluating the model
